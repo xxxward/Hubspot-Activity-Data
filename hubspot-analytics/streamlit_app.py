@@ -213,8 +213,7 @@ with st.sidebar:
 
 
 # ── Filters (top) ──────────────────────────────────────────────────────
-_ds = date.today() - timedelta(days=7)
-date_range = st.date_input("📅 Date Range", value=(_ds, date.today()), max_value=date.today())
+date_range = st.date_input("📅 Date Range", value=(_ds, date.today()), max_value=date.today(), label_visibility="visible")
 start_date, end_date = (date_range if isinstance(date_range, tuple) and len(date_range) == 2 else (_ds, date.today()))
 
 c1, c2 = st.columns(2)
