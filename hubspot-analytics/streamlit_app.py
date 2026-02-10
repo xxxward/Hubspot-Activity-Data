@@ -1,5 +1,5 @@
 """
-HubSpot Sales Analytics Dashboard
+Calyx Activity Hub — HubSpot Sales Analytics
 """
 
 import streamlit as st
@@ -15,157 +15,213 @@ from main import load_all, AnalyticsData
 
 setup_logging()
 
-st.set_page_config(page_title="Calyx Activity Hub", page_icon="\U0001f4ca", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Calyx Activity Hub", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 
-
-# ── Theme CSS ───────────────────────────────────────────────────────────
+# ── Theme ───────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
-    .stApp { background-color: #1a1d23; font-family: 'DM Sans', sans-serif; }
+/* Base */
+:root {
+    --bg-primary: #0d1117;
+    --bg-card: #161b22;
+    --bg-hover: #1c2129;
+    --border: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #6e7681;
+    --accent-green: #3fb950;
+    --accent-blue: #58a6ff;
+    --accent-purple: #bc8cff;
+    --accent-amber: #d29922;
+    --accent-red: #f85149;
+}
 
-    /* Sidebar */
-    section[data-testid="stSidebar"] { background-color: #1e2128; border-right: 1px solid #2d323b; }
-    section[data-testid="stSidebar"] h3,
-    section[data-testid="stSidebar"] p,
-    section[data-testid="stSidebar"] span,
-    section[data-testid="stSidebar"] label,
-    section[data-testid="stSidebar"] .stMarkdown {
-        color: #d0d7de !important;
-    }
-    section[data-testid="stSidebar"] .stCaption p { color: #8a919e !important; }
+.stApp {
+    background: var(--bg-primary);
+    font-family: 'Inter', -apple-system, sans-serif;
+}
 
-    /* Global text */
-    .stApp, .stApp p, .stApp span, .stApp label, .stApp li,
-    .stMarkdown, .stMarkdown p, .stMarkdown span { color: #d0d7de; }
+/* Sidebar */
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #0d1117 0%, #161b22 100%);
+    border-right: 1px solid var(--border);
+}
+section[data-testid="stSidebar"] * { color: var(--text-primary) !important; }
+section[data-testid="stSidebar"] .stCaption * { color: var(--text-muted) !important; }
 
-    /* KPI cards */
-    .kpi-row { display: flex; gap: 12px; margin: 16px 0; }
-    .kpi-card {
-        flex: 1;
-        background: #22262e;
-        border: 1px solid #2d323b;
-        border-radius: 10px;
-        padding: 18px 20px;
-    }
-    .kpi-label { color: #8a919e; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; font-weight: 500; }
-    .kpi-value { font-size: 1.85rem; font-weight: 700; line-height: 1.2; color: #e6edf3; }
-    .kpi-green { color: #4ade80; }
-    .kpi-blue { color: #60a5fa; }
-    .kpi-amber { color: #fbbf24; }
-    .kpi-red { color: #f87171; }
+/* Global text */
+.stApp, .stApp p, .stApp span, .stApp label, .stApp li,
+.stMarkdown, .stMarkdown p, .stMarkdown span,
+.stExpander summary, .stExpander summary span,
+.stExpander [data-testid="stExpanderDetails"] p,
+details summary span { color: var(--text-primary) !important; }
 
-    /* Section header */
-    .sec-header {
-        color: #e6edf3;
-        font-size: 1.05rem;
-        font-weight: 600;
-        padding: 10px 0 8px;
-        margin: 12px 0 8px;
-        border-bottom: 1px solid #2d323b;
-    }
+/* ── KPI Cards ── */
+.kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 14px;
+    margin: 20px 0;
+}
+.kpi {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    position: relative;
+    overflow: hidden;
+}
+.kpi::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    border-radius: 12px 12px 0 0;
+}
+.kpi.green::before { background: var(--accent-green); }
+.kpi.blue::before { background: var(--accent-blue); }
+.kpi.purple::before { background: var(--accent-purple); }
+.kpi.amber::before { background: var(--accent-amber); }
+.kpi.red::before { background: var(--accent-red); }
+.kpi-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+.kpi-val {
+    font-size: 1.9rem;
+    font-weight: 800;
+    color: var(--text-primary);
+    line-height: 1;
+}
+.kpi.green .kpi-val { color: var(--accent-green); }
+.kpi.blue .kpi-val { color: var(--accent-blue); }
+.kpi.purple .kpi-val { color: var(--accent-purple); }
+.kpi.amber .kpi-val { color: var(--accent-amber); }
+.kpi.red .kpi-val { color: var(--accent-red); }
 
-    /* Filter labels */
-    .stMultiSelect label, .stDateInput label, .stSelectbox label {
-        color: #8a919e !important;
-        font-size: 0.78rem !important;
-        text-transform: uppercase !important;
-        letter-spacing: 0.8px !important;
-    }
+/* ── Section titles ── */
+.sec-title {
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-secondary);
+    padding: 16px 0 10px;
+    margin: 8px 0;
+}
 
-    /* Expanders */
-    .stExpander { border: 1px solid #2d323b; border-radius: 10px; }
-    .stExpander summary,
-    .stExpander summary span,
-    .stExpander summary p,
-    .stExpander [data-testid="stExpanderDetails"] p,
-    details summary span { color: #d0d7de !important; }
+/* ── Brand ── */
+.brand {
+    font-size: 1.1rem;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    color: var(--accent-blue);
+    margin-bottom: 4px;
+}
+.brand-sub {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
 
-    /* Tabs */
-    .stTabs [data-baseweb="tab"] { color: #8a919e; }
-    .stTabs [aria-selected="true"] { color: #60a5fa; }
+/* ── Nav buttons ── */
+.nav-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    margin: 20px 0 8px;
+}
 
-    /* Tables */
-    .stDataFrame { border-radius: 8px; overflow: hidden; }
+/* ── Misc ── */
+.stExpander { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.stTabs [data-baseweb="tab"] { color: var(--text-secondary); font-weight: 500; }
+.stTabs [aria-selected="true"] { color: var(--accent-blue); }
+hr { border-color: var(--border) !important; }
+.block-container { padding-top: 0.8rem; }
+.stDataFrame { border-radius: 10px; overflow: hidden; }
 
-    /* Dividers */
-    hr { border-color: #2d323b; }
-
-    .block-container { padding-top: 1rem; }
+/* Fix multiselect overflow */
+.stMultiSelect > div { max-height: none !important; }
+div[data-baseweb="select"] > div { flex-wrap: wrap !important; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── Plotly Theme ────────────────────────────────────────────────────────
-def _apply_plotly_theme(fig):
+# ── Plotly theme helper ─────────────────────────────────────────────────
+def styled_fig(fig, height=340):
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="#22262e",
-        font=dict(color="#b0b8c4", family="DM Sans, sans-serif", size=12),
-        xaxis=dict(gridcolor="#2d323b", zerolinecolor="#2d323b"),
-        yaxis=dict(gridcolor="#2d323b", zerolinecolor="#2d323b"),
-        margin=dict(l=40, r=20, t=36, b=40),
-        legend=dict(bgcolor="rgba(0,0,0,0)", orientation="h", y=-0.15),
+        plot_bgcolor="#161b22",
+        font=dict(color="#8b949e", family="Inter, sans-serif", size=11),
+        xaxis=dict(gridcolor="#21262d", zerolinecolor="#21262d", tickfont=dict(size=10)),
+        yaxis=dict(gridcolor="#21262d", zerolinecolor="#21262d", tickfont=dict(size=10)),
+        margin=dict(l=40, r=16, t=32, b=48),
+        legend=dict(bgcolor="rgba(0,0,0,0)", orientation="h", y=-0.18, font=dict(size=10)),
         showlegend=True,
+        height=height,
+        bargap=0.3,
     )
     return fig
 
-COLORS = {
-    "meetings": "#4ade80", "calls": "#60a5fa", "tasks": "#fbbf24",
-    "completed_tasks": "#fbbf24", "overdue": "#f87171",
-    "active": "#4ade80", "stale": "#fbbf24", "inactive": "#f87171", "no_activity": "#555d6b",
-}
+C = {"meetings": "#3fb950", "calls": "#58a6ff", "emails": "#bc8cff",
+     "tasks": "#d29922", "completed_tasks": "#d29922", "overdue": "#f85149",
+     "active": "#3fb950", "stale": "#d29922", "inactive": "#f85149", "none": "#484f58"}
 
 
-# ── Data Loading ────────────────────────────────────────────────────────
+# ── Data ────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=600, show_spinner="Loading data...")
-def get_data() -> dict:
+def get_data():
     d = load_all()
     return {f: getattr(d, f) for f in d.__dataclass_fields__}
 
 try:
-    _d = get_data()
-    data = AnalyticsData(**_d)
+    data = AnalyticsData(**get_data())
 except Exception as e:
     st.error(f"**Data load failed:** {e}")
     st.stop()
 
 
-# ── Sidebar: Navigation ────────────────────────────────────────────────
-st.sidebar.markdown("### Calyx Activity Hub")
-st.sidebar.markdown("---")
+# ── Sidebar ─────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown('<div class="brand">Calyx Activity Hub</div>', unsafe_allow_html=True)
+    st.markdown('<div class="brand-sub">HubSpot Analytics</div>', unsafe_allow_html=True)
+    st.markdown("---")
 
-if "page" not in st.session_state:
-    st.session_state.page = "Rep Activity"
+    st.markdown('<div class="nav-label">Navigation</div>', unsafe_allow_html=True)
+    if "page" not in st.session_state:
+        st.session_state.page = "activity"
+    for key, label, icon in [("activity", "Rep Activity", "📊"), ("deals", "Deal Health", "🏥")]:
+        if st.button(f"{icon}  {label}", key=f"n_{key}", use_container_width=True,
+                     type="primary" if st.session_state.page == key else "secondary"):
+            st.session_state.page = key
+            st.rerun()
 
-for p in ["Rep Activity", "Deal Health Monitor"]:
-    if st.sidebar.button(p, key=f"nav_{p}", use_container_width=True,
-                         type="primary" if st.session_state.page == p else "secondary"):
-        st.session_state.page = p
-        st.rerun()
-
-st.sidebar.markdown("---")
-st.sidebar.caption(
-    f"{len(data.deals)} deals · {len(data.calls)} calls · "
-    f"{len(data.meetings)} mtgs · {len(data.emails)} emails · {len(data.tasks)} tasks"
-)
+    st.markdown("---")
+    st.caption(
+        f"{len(data.deals)} deals · {len(data.calls)} calls\n"
+        f"{len(data.meetings)} mtgs · {len(data.emails)} emails · {len(data.tasks)} tasks"
+    )
 
 
-# ── Top Filter Bar ──────────────────────────────────────────────────────
-with st.container():
-    f1, f2 = st.columns([1, 3])
-    with f1:
-        _ds = date.today() - timedelta(days=7)
-        date_range = st.date_input("DATE RANGE", value=(_ds, date.today()), max_value=date.today())
-        start_date, end_date = (date_range if isinstance(date_range, tuple) and len(date_range) == 2
-                                else (_ds, date.today()))
-    with f2:
-        selected_reps = st.multiselect("REPS", REPS_IN_SCOPE, default=REPS_IN_SCOPE)
+# ── Filters (top) ──────────────────────────────────────────────────────
+_ds = date.today() - timedelta(days=7)
+date_range = st.date_input("📅 Date Range", value=(_ds, date.today()), max_value=date.today())
+start_date, end_date = (date_range if isinstance(date_range, tuple) and len(date_range) == 2 else (_ds, date.today()))
 
-    selected_pipelines = st.multiselect("PIPELINES", PIPELINES_IN_SCOPE, default=PIPELINES_IN_SCOPE)
-
-st.markdown("---")
+c1, c2 = st.columns(2)
+with c1:
+    selected_reps = st.multiselect("👤 Sales Reps", REPS_IN_SCOPE, default=REPS_IN_SCOPE)
+with c2:
+    selected_pipelines = st.multiselect("🔀 Pipelines", PIPELINES_IN_SCOPE, default=PIPELINES_IN_SCOPE)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────
@@ -191,286 +247,247 @@ def _fdate(df, col="period_day"):
     dt = pd.to_datetime(df[col], errors="coerce").dt.date
     return df[(dt >= start_date) & (dt <= end_date)].copy()
 
-def _safe_sort(df, col, ascending=False):
-    try:
-        return df.sort_values(col, ascending=ascending)
-    except Exception:
-        return df
+def _safe_sort(df, col, asc=False):
+    try: return df.sort_values(col, ascending=asc)
+    except: return df
 
-def kpi_html(cards):
-    """cards = list of (label, value, accent_class)"""
-    html = '<div class="kpi-row">'
-    for label, value, accent in cards:
-        vc = f"kpi-value {accent}" if accent else "kpi-value"
-        html += f'<div class="kpi-card"><div class="kpi-label">{label}</div><div class="{vc}">{value}</div></div>'
+def kpi(cards):
+    html = '<div class="kpi-grid">'
+    for label, val, accent in cards:
+        cls = f"kpi {accent}" if accent else "kpi"
+        html += f'<div class="{cls}"><div class="kpi-label">{label}</div><div class="kpi-val">{val}</div></div>'
     html += '</div>'
     st.markdown(html, unsafe_allow_html=True)
 
-def hubspot_deal_url(deal_id):
-    if pd.isna(deal_id) or str(deal_id).strip() == "": return ""
-    return f"https://app.hubspot.com/contacts/44704741/deal/{int(float(str(deal_id)))}"
+def hs_deal_url(did):
+    if pd.isna(did) or not str(did).strip(): return ""
+    return f"https://app.hubspot.com/contacts/44704741/deal/{int(float(str(did)))}"
 
 
 # ════════════════════════════════════════════════════════════════════════
 # PAGE: REP ACTIVITY
 # ════════════════════════════════════════════════════════════════════════
+if st.session_state.page == "activity":
 
-if st.session_state.page == "Rep Activity":
+    st.markdown("---")
 
-    st.markdown(f'<div class="sec-header">Activity — {start_date.strftime("%b %d")} to {end_date.strftime("%b %d, %Y")}</div>', unsafe_allow_html=True)
+    fm = _fdate_raw(_frep(data.meetings), "meeting_start_time")
+    fc = _fdate_raw(_frep(data.calls), "activity_date")
+    ft = _fdate_raw(_frep(data.tasks), "completed_at")
+    fe = _fdate_raw(_frep(data.emails), "activity_date")
+    total = len(fm) + len(fc) + len(ft) + len(fe)
 
-    filt_meetings = _fdate_raw(_frep(data.meetings), "meeting_start_time")
-    filt_calls = _fdate_raw(_frep(data.calls), "activity_date")
-    filt_tasks = _fdate_raw(_frep(data.tasks), "completed_at")
-    filt_emails = _fdate_raw(_frep(data.emails), "activity_date")
-    total = len(filt_meetings) + len(filt_calls) + len(filt_tasks) + len(filt_emails)
-
-    kpi_html([
-        ("Total Activities", f"{total:,}", ""),
-        ("Meetings", f"{len(filt_meetings):,}", "kpi-green"),
-        ("Calls", f"{len(filt_calls):,}", "kpi-blue"),
-        ("Emails", f"{len(filt_emails):,}", "kpi-amber"),
-        ("Tasks", f"{len(filt_tasks):,}", "kpi-amber"),
+    kpi([
+        ("Total", f"{total:,}", ""),
+        ("Meetings", f"{len(fm):,}", "green"),
+        ("Calls", f"{len(fc):,}", "blue"),
+        ("Emails", f"{len(fe):,}", "purple"),
+        ("Tasks", f"{len(ft):,}", "amber"),
     ])
 
-    # ── Leaderboard ──
-    st.markdown('<div class="sec-header">Leaderboard</div>', unsafe_allow_html=True)
+    # Leaderboard
+    st.markdown('<div class="sec-title">Leaderboard</div>', unsafe_allow_html=True)
 
-    lb_rows = []
+    rows = []
     for rep in selected_reps:
-        m = len(filt_meetings[filt_meetings["hubspot_owner_name"] == rep]) if not filt_meetings.empty and "hubspot_owner_name" in filt_meetings.columns else 0
-        c = len(filt_calls[filt_calls["hubspot_owner_name"] == rep]) if not filt_calls.empty and "hubspot_owner_name" in filt_calls.columns else 0
-        e = len(filt_emails[filt_emails["hubspot_owner_name"] == rep]) if not filt_emails.empty and "hubspot_owner_name" in filt_emails.columns else 0
+        m = len(fm[fm["hubspot_owner_name"] == rep]) if not fm.empty and "hubspot_owner_name" in fm.columns else 0
+        c = len(fc[fc["hubspot_owner_name"] == rep]) if not fc.empty and "hubspot_owner_name" in fc.columns else 0
+        e = len(fe[fe["hubspot_owner_name"] == rep]) if not fe.empty and "hubspot_owner_name" in fe.columns else 0
         comp, over = 0, 0
-        if not filt_tasks.empty and "hubspot_owner_name" in filt_tasks.columns:
-            rt = filt_tasks[filt_tasks["hubspot_owner_name"] == rep]
+        if not ft.empty and "hubspot_owner_name" in ft.columns:
+            rt = ft[ft["hubspot_owner_name"] == rep]
             if "task_status" in rt.columns and not rt.empty:
                 u = rt["task_status"].astype(str).str.upper().str.strip()
                 comp = int(u.isin({"COMPLETED", "COMPLETE", "DONE"}).sum())
                 over = int(u.isin({"OVERDUE", "PAST_DUE", "DEFERRED"}).sum())
         score = m*WEIGHTS["meetings"] + c*WEIGHTS["calls"] + e*WEIGHTS["emails"] + comp*WEIGHTS["completed_tasks"] + over*WEIGHTS["overdue_tasks"]
-        lb_rows.append({"Rep": rep, "Meetings": m, "Calls": c, "Emails": e, "Tasks": comp, "Overdue": over, "Score": score})
+        rows.append({"Rep": rep, "Meetings": m, "Calls": c, "Emails": e, "Tasks": comp, "Overdue": over, "Score": score})
 
-    leaderboard = pd.DataFrame(lb_rows).sort_values("Score", ascending=False).reset_index(drop=True)
-    st.dataframe(leaderboard, use_container_width=True, hide_index=True)
+    lb = pd.DataFrame(rows).sort_values("Score", ascending=False).reset_index(drop=True)
+    st.dataframe(lb, use_container_width=True, hide_index=True)
 
-    # ── Charts row ──
+    # Charts
     ch1, ch2 = st.columns(2)
-
     with ch1:
-        st.markdown('<div class="sec-header">By Rep</div>', unsafe_allow_html=True)
-        if not leaderboard.empty:
+        st.markdown('<div class="sec-title">Activity by Rep</div>', unsafe_allow_html=True)
+        if not lb.empty:
             fig = px.bar(
-                leaderboard.melt(id_vars="Rep", value_vars=["Meetings", "Calls", "Emails", "Tasks"],
-                                 var_name="Type", value_name="Count"),
+                lb.melt(id_vars="Rep", value_vars=["Meetings", "Calls", "Emails", "Tasks"],
+                        var_name="Type", value_name="Count"),
                 x="Rep", y="Count", color="Type", barmode="group",
-                color_discrete_map={"Meetings": COLORS["meetings"], "Calls": COLORS["calls"],
-                                    "Emails": "#c084fc", "Tasks": COLORS["tasks"]},
+                color_discrete_map={"Meetings": C["meetings"], "Calls": C["calls"],
+                                    "Emails": C["emails"], "Tasks": C["tasks"]},
             )
             fig.update_layout(xaxis_title="", yaxis_title="")
-            _apply_plotly_theme(fig)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(styled_fig(fig), use_container_width=True)
 
     with ch2:
-        st.markdown('<div class="sec-header">Daily Trend</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sec-title">Daily Trend</div>', unsafe_allow_html=True)
         daily = _fdate(_frep(data.activity_counts_daily), "period_day")
         if not daily.empty:
-            mcols = [c for c in ("meetings", "calls", "completed_tasks") if c in daily.columns]
+            mcols = [c for c in ("meetings", "calls", "emails", "completed_tasks") if c in daily.columns]
             if mcols and "period_day" in daily.columns:
                 trend = daily.groupby("period_day", dropna=False)[mcols].sum().reset_index()
                 trend["period_day"] = pd.to_datetime(trend["period_day"])
                 fig2 = px.line(
                     trend.melt(id_vars="period_day", value_vars=mcols, var_name="Type", value_name="Count"),
                     x="period_day", y="Count", color="Type",
-                    color_discrete_map={"meetings": COLORS["meetings"], "calls": COLORS["calls"], "completed_tasks": COLORS["tasks"]},
+                    color_discrete_map={"meetings": C["meetings"], "calls": C["calls"],
+                                        "emails": C["emails"], "completed_tasks": C["tasks"]},
                 )
-                fig2.update_traces(line_width=2.5)
+                fig2.update_traces(line_width=2.5, mode="lines+markers")
                 fig2.update_layout(xaxis_title="", yaxis_title="")
-                _apply_plotly_theme(fig2)
-                st.plotly_chart(fig2, use_container_width=True)
+                st.plotly_chart(styled_fig(fig2), use_container_width=True)
         else:
-            st.info("No daily data for this range.")
+            st.caption("No daily data for this range.")
 
-    # ── Rep Drilldowns ──
-    st.markdown('<div class="sec-header">Rep Details</div>', unsafe_allow_html=True)
+    # Drilldowns
+    st.markdown('<div class="sec-title">Rep Details</div>', unsafe_allow_html=True)
 
-    for _, row in leaderboard.iterrows():
-        rep = row["Rep"]
-        with st.expander(f"**{rep}** — {row['Meetings']} meetings · {row['Calls']} calls · {row['Emails']} emails · {row['Tasks']} tasks · Score: {row['Score']}"):
+    for _, r in lb.iterrows():
+        rep = r["Rep"]
+        with st.expander(f"**{rep}**  ·  {r['Meetings']} mtgs  ·  {r['Calls']} calls  ·  {r['Emails']} emails  ·  {r['Tasks']} tasks  ·  Score {r['Score']}"):
+            t1, t2, t3, t4 = st.tabs(["🟢 Meetings", "🔵 Calls", "🟣 Emails", "🟡 Tasks"])
 
-            dtab_m, dtab_c, dtab_e, dtab_t = st.tabs(["Meetings", "Calls", "Emails", "Tasks"])
-
-            with dtab_m:
-                rm = filt_meetings[filt_meetings["hubspot_owner_name"] == rep] if not filt_meetings.empty and "hubspot_owner_name" in filt_meetings.columns else pd.DataFrame()
+            with t1:
+                rm = fm[fm["hubspot_owner_name"] == rep] if not fm.empty and "hubspot_owner_name" in fm.columns else pd.DataFrame()
                 if not rm.empty:
-                    show = [c for c in ("meeting_start_time", "meeting_name", "company_name",
-                                        "meeting_outcome", "call_and_meeting_type", "has_gong") if c in rm.columns]
-                    st.dataframe(_safe_sort(rm[show].copy(), show[0]) if show else rm,
-                                 use_container_width=True, hide_index=True)
-                else:
-                    st.caption("No meetings this period.")
+                    s = [c for c in ("meeting_start_time", "meeting_name", "company_name", "meeting_outcome", "call_and_meeting_type", "has_gong") if c in rm.columns]
+                    st.dataframe(_safe_sort(rm[s].copy(), s[0]) if s else rm, use_container_width=True, hide_index=True)
+                else: st.caption("No meetings.")
 
-            with dtab_c:
-                rc = filt_calls[filt_calls["hubspot_owner_name"] == rep] if not filt_calls.empty and "hubspot_owner_name" in filt_calls.columns else pd.DataFrame()
+            with t2:
+                rc = fc[fc["hubspot_owner_name"] == rep] if not fc.empty and "hubspot_owner_name" in fc.columns else pd.DataFrame()
                 if not rc.empty:
-                    show = [c for c in ("activity_date", "company_name", "call_outcome",
-                                        "call_direction", "call_duration", "call_and_meeting_type") if c in rc.columns]
-                    st.dataframe(_safe_sort(rc[show].copy(), show[0]) if show else rc,
-                                 use_container_width=True, hide_index=True)
-                else:
-                    st.caption("No calls this period.")
+                    s = [c for c in ("activity_date", "company_name", "call_outcome", "call_direction", "call_duration", "call_and_meeting_type") if c in rc.columns]
+                    st.dataframe(_safe_sort(rc[s].copy(), s[0]) if s else rc, use_container_width=True, hide_index=True)
+                else: st.caption("No calls.")
 
-            with dtab_e:
-                re = filt_emails[filt_emails["hubspot_owner_name"] == rep] if not filt_emails.empty and "hubspot_owner_name" in filt_emails.columns else pd.DataFrame()
+            with t3:
+                re = fe[fe["hubspot_owner_name"] == rep] if not fe.empty and "hubspot_owner_name" in fe.columns else pd.DataFrame()
                 if not re.empty:
-                    show = [c for c in ("activity_date", "email_subject", "company_name",
-                                        "email_direction", "email_send_status",
-                                        "email_from_address", "email_to_address") if c in re.columns]
-                    st.dataframe(_safe_sort(re[show].copy(), show[0]) if show else re,
-                                 use_container_width=True, hide_index=True)
-                else:
-                    st.caption("No emails this period.")
+                    s = [c for c in ("activity_date", "email_subject", "company_name", "email_direction", "email_send_status", "email_from_address", "email_to_address") if c in re.columns]
+                    st.dataframe(_safe_sort(re[s].copy(), s[0]) if s else re, use_container_width=True, hide_index=True)
+                else: st.caption("No emails.")
 
-            with dtab_t:
-                rt = filt_tasks[filt_tasks["hubspot_owner_name"] == rep] if not filt_tasks.empty and "hubspot_owner_name" in filt_tasks.columns else pd.DataFrame()
+            with t4:
+                rt = ft[ft["hubspot_owner_name"] == rep] if not ft.empty and "hubspot_owner_name" in ft.columns else pd.DataFrame()
                 if not rt.empty:
-                    show = [c for c in ("completed_at", "task_title", "company_name",
-                                        "task_status", "priority", "task_type") if c in rt.columns]
-                    st.dataframe(_safe_sort(rt[show].copy(), show[0]) if show else rt,
-                                 use_container_width=True, hide_index=True)
-                else:
-                    st.caption("No tasks this period.")
+                    s = [c for c in ("completed_at", "task_title", "company_name", "task_status", "priority", "task_type") if c in rt.columns]
+                    st.dataframe(_safe_sort(rt[s].copy(), s[0]) if s else rt, use_container_width=True, hide_index=True)
+                else: st.caption("No tasks.")
 
 
 # ════════════════════════════════════════════════════════════════════════
-# PAGE: DEAL HEALTH MONITOR
+# PAGE: DEAL HEALTH
 # ════════════════════════════════════════════════════════════════════════
+elif st.session_state.page == "deals":
 
-elif st.session_state.page == "Deal Health Monitor":
-
-    st.markdown('<div class="sec-header">Deal Health Monitor — Active Pipeline</div>', unsafe_allow_html=True)
+    st.markdown("---")
 
     deals_f = _frep(_fpipe(data.deals))
-    active_deals = deals_f[~deals_f["is_terminal"]].copy() if "is_terminal" in deals_f.columns else deals_f.copy()
+    active = deals_f[~deals_f["is_terminal"]].copy() if "is_terminal" in deals_f.columns else deals_f.copy()
+    am, ac, at, ae = _frep(data.meetings), _frep(data.calls), _frep(data.tasks), _frep(data.emails)
 
-    all_meetings = _frep(data.meetings)
-    all_calls = _frep(data.calls)
-    all_tasks = _frep(data.tasks)
-    all_emails = _frep(data.emails)
-
-    if active_deals.empty:
-        st.info("No active deals for selected filters.")
+    if active.empty:
+        st.info("No active deals.")
     else:
-        # Activity summary by company
-        act_frames = []
-        for df, atype, dcol in [(all_calls, "Call", "activity_date"), (all_meetings, "Meeting", "meeting_start_time"), (all_tasks, "Task", "completed_at"), (all_emails, "Email", "activity_date")]:
+        # Activity by company
+        frames = []
+        for df, typ, dc in [(ac, "Call", "activity_date"), (am, "Meeting", "meeting_start_time"), (at, "Task", "completed_at"), (ae, "Email", "activity_date")]:
             if df.empty or "company_name" not in df.columns: continue
-            tmp = df[["company_name"]].copy()
-            tmp["_dt"] = pd.to_datetime(df[dcol], errors="coerce") if dcol in df.columns else pd.NaT
-            tmp["_type"] = atype
-            act_frames.append(tmp)
+            t = df[["company_name"]].copy()
+            t["_dt"] = pd.to_datetime(df[dc], errors="coerce") if dc in df.columns else pd.NaT
+            t["_tp"] = typ
+            frames.append(t)
 
         now = pd.Timestamp.now()
-        day7, day30 = now - pd.Timedelta(days=7), now - pd.Timedelta(days=30)
+        d7, d30 = now - pd.Timedelta(days=7), now - pd.Timedelta(days=30)
 
-        if act_frames:
-            all_act = pd.concat(act_frames, ignore_index=True).dropna(subset=["company_name"])
-            all_act["_co"] = all_act["company_name"].astype(str).str.strip().str.lower()
-            co_summary = all_act.groupby("_co").agg(
-                last_activity=("_dt", "max"), total=("_dt", "count"),
-                act_7d=("_dt", lambda x: (x >= day7).sum()),
-                act_30d=("_dt", lambda x: (x >= day30).sum()),
-                calls=("_type", lambda x: (x == "Call").sum()),
-                mtgs=("_type", lambda x: (x == "Meeting").sum()),
-                emails_ct=("_type", lambda x: (x == "Email").sum()),
-                tasks_ct=("_type", lambda x: (x == "Task").sum()),
+        if frames:
+            aa = pd.concat(frames, ignore_index=True).dropna(subset=["company_name"])
+            aa["_co"] = aa["company_name"].astype(str).str.strip().str.lower()
+            cs = aa.groupby("_co").agg(
+                last_act=("_dt", "max"), total=("_dt", "count"),
+                a7=("_dt", lambda x: (x >= d7).sum()), a30=("_dt", lambda x: (x >= d30).sum()),
+                calls=("_tp", lambda x: (x == "Call").sum()),
+                mtgs=("_tp", lambda x: (x == "Meeting").sum()),
+                emails=("_tp", lambda x: (x == "Email").sum()),
+                tasks=("_tp", lambda x: (x == "Task").sum()),
             ).reset_index()
         else:
-            co_summary = pd.DataFrame(columns=["_co", "last_activity", "total", "act_7d", "act_30d", "calls", "mtgs", "emails_ct", "tasks_ct"])
+            cs = pd.DataFrame(columns=["_co"])
 
-        active_deals["_co"] = active_deals["company_name"].astype(str).str.strip().str.lower() if "company_name" in active_deals.columns else ""
-        merged = active_deals.merge(co_summary, on="_co", how="left")
+        active["_co"] = active["company_name"].astype(str).str.strip().str.lower() if "company_name" in active.columns else ""
+        mg = active.merge(cs, on="_co", how="left")
 
-        for c in ["total", "act_7d", "act_30d", "calls", "mtgs", "emails_ct", "tasks_ct"]:
-            if c in merged.columns: merged[c] = merged[c].fillna(0).astype(int)
+        for col in ["total", "a7", "a30", "calls", "mtgs", "emails", "tasks"]:
+            if col in mg.columns: mg[col] = mg[col].fillna(0).astype(int)
 
-        merged["health"] = merged.get("last_activity", pd.Series(dtype="datetime64[ns]")).apply(
-            lambda x: "Active" if pd.notna(x) and x >= day7 else ("Stale" if pd.notna(x) and x >= day30 else ("Inactive" if pd.notna(x) else "No Activity"))
+        mg["health"] = mg.get("last_act", pd.Series(dtype="datetime64[ns]")).apply(
+            lambda x: "Active" if pd.notna(x) and x >= d7 else ("Stale" if pd.notna(x) and x >= d30 else ("Inactive" if pd.notna(x) else "No Activity"))
         )
-        merged["days_since"] = merged.get("last_activity", pd.Series(dtype="datetime64[ns]")).apply(
+        mg["days_idle"] = mg.get("last_act", pd.Series(dtype="datetime64[ns]")).apply(
             lambda x: (now - x).days if pd.notna(x) else None
         )
 
-        # KPIs
-        n_active = len(merged[merged["health"] == "Active"])
-        n_warn = len(merged[merged["health"].isin(["Stale", "Inactive", "No Activity"])])
-        kpi_html([
-            ("Active Deals", f"{len(merged):,}", ""),
-            ("Pipeline Value", f"${merged['amount'].sum():,.0f}" if "amount" in merged.columns else "$0", "kpi-blue"),
-            ("Engaged (7d)", f"{n_active}", "kpi-green"),
-            ("Needs Attention", f"{n_warn}", "kpi-red"),
+        na = len(mg[mg["health"] == "Active"])
+        nw = len(mg) - na
+        kpi([
+            ("Active Deals", f"{len(mg):,}", ""),
+            ("Pipeline", f"${mg['amount'].sum():,.0f}" if "amount" in mg.columns else "$0", "blue"),
+            ("Engaged 7d", f"{na}", "green"),
+            ("Needs Attention", f"{nw}", "red"),
         ])
 
-        # Health chart + flagged deals
+        # Health + Flagged
         h1, h2 = st.columns([1, 2])
-
         with h1:
-            st.markdown('<div class="sec-header">Health Distribution</div>', unsafe_allow_html=True)
-            hc = merged["health"].value_counts().reset_index()
+            st.markdown('<div class="sec-title">Health</div>', unsafe_allow_html=True)
+            hc = mg["health"].value_counts().reset_index()
             hc.columns = ["Health", "Count"]
-            fig_h = px.pie(hc, names="Health", values="Count", color="Health", hole=0.45,
-                           color_discrete_map={"Active": COLORS["active"], "Stale": COLORS["stale"],
-                                               "Inactive": COLORS["inactive"], "No Activity": COLORS["no_activity"]})
-            _apply_plotly_theme(fig_h)
-            fig_h.update_traces(textinfo="label+value", textfont_color="#b0b8c4")
-            st.plotly_chart(fig_h, use_container_width=True)
+            fh = px.pie(hc, names="Health", values="Count", color="Health", hole=0.5,
+                        color_discrete_map={"Active": C["active"], "Stale": C["stale"],
+                                            "Inactive": C["inactive"], "No Activity": C["none"]})
+            styled_fig(fh, 300)
+            fh.update_traces(textinfo="label+value", textfont=dict(color="#e6edf3", size=11))
+            st.plotly_chart(fh, use_container_width=True)
 
         with h2:
-            st.markdown('<div class="sec-header">Flagged — Forecasted but No Recent Activity</div>', unsafe_allow_html=True)
-            if "forecast_category" in merged.columns:
-                flagged = merged[
-                    (merged["forecast_category"].isin({"Best Case", "Commit", "Expect"})) &
-                    (merged["health"].isin(["Stale", "Inactive", "No Activity"]))
-                ]
+            st.markdown('<div class="sec-title">Flagged — Forecast with No Recent Activity</div>', unsafe_allow_html=True)
+            if "forecast_category" in mg.columns:
+                fl = mg[(mg["forecast_category"].isin({"Best Case", "Commit", "Expect"})) &
+                        (mg["health"].isin(["Stale", "Inactive", "No Activity"]))]
+            else: fl = pd.DataFrame()
+            if not fl.empty:
+                sc = [c for c in ("hubspot_owner_name", "deal_name", "company_name", "deal_stage",
+                                  "forecast_category", "amount", "close_date", "health", "days_idle", "a30") if c in fl.columns]
+                st.dataframe(_safe_sort(fl[sc], "days_idle"), use_container_width=True, hide_index=True)
             else:
-                flagged = pd.DataFrame()
+                st.success("✅ All forecasted deals have recent activity.")
 
-            if not flagged.empty:
-                show = [c for c in ("hubspot_owner_name", "deal_name", "company_name", "deal_stage",
-                                    "forecast_category", "amount", "close_date", "health", "days_since", "act_30d") if c in flagged.columns]
-                st.dataframe(_safe_sort(flagged[show], "days_since"), use_container_width=True, hide_index=True)
-            else:
-                st.success("All forecasted deals have recent activity.")
-
-        # Per-rep deals
-        st.markdown('<div class="sec-header">Deals by Rep</div>', unsafe_allow_html=True)
-
+        # Per-rep
+        st.markdown('<div class="sec-title">Deals by Rep</div>', unsafe_allow_html=True)
         for rep in selected_reps:
-            rd = merged[merged["hubspot_owner_name"] == rep] if "hubspot_owner_name" in merged.columns else pd.DataFrame()
+            rd = mg[mg["hubspot_owner_name"] == rep] if "hubspot_owner_name" in mg.columns else pd.DataFrame()
             if rd.empty: continue
-
             n = len(rd)
-            val = rd["amount"].sum() if "amount" in rd.columns else 0
-            n_ok = len(rd[rd["health"] == "Active"])
-            n_bad = n - n_ok
+            v = rd["amount"].sum() if "amount" in rd.columns else 0
+            nok = len(rd[rd["health"] == "Active"])
 
-            with st.expander(f"**{rep}** — {n} deals · ${val:,.0f} · {n_ok} active · {n_bad} attention"):
-                show = [c for c in ("deal_name", "company_name", "deal_stage", "forecast_category",
-                                    "amount", "close_date", "health", "days_since",
-                                    "calls", "mtgs", "emails_ct", "tasks_ct", "act_30d") if c in rd.columns]
-                display = _safe_sort(rd[show].copy(), "days_since")
-
+            with st.expander(f"**{rep}**  ·  {n} deals  ·  ${v:,.0f}  ·  {nok} active  ·  {n - nok} attention"):
+                sc = [c for c in ("deal_name", "company_name", "deal_stage", "forecast_category",
+                                  "amount", "close_date", "health", "days_idle",
+                                  "calls", "mtgs", "emails", "tasks", "a30") if c in rd.columns]
+                disp = _safe_sort(rd[sc].copy(), "days_idle")
                 if "deal_id" in rd.columns:
-                    display = display.copy()
-                    display.insert(0, "HubSpot", rd["deal_id"].apply(
-                        lambda x: hubspot_deal_url(x) if pd.notna(x) and str(x).strip() else ""
-                    ))
-
-                st.dataframe(display, use_container_width=True, hide_index=True,
+                    disp = disp.copy()
+                    disp.insert(0, "HS", rd["deal_id"].apply(lambda x: hs_deal_url(x) if pd.notna(x) and str(x).strip() else ""))
+                st.dataframe(disp, use_container_width=True, hide_index=True,
                     column_config={
-                        "HubSpot": st.column_config.LinkColumn("HS Link", display_text="Open"),
+                        "HS": st.column_config.LinkColumn("Link", display_text="Open"),
                         "amount": st.column_config.NumberColumn("Amount", format="$%,.0f"),
-                        "days_since": st.column_config.NumberColumn("Days Idle"),
-                        "calls": "Calls", "mtgs": "Meetings", "emails_ct": "Emails", "tasks_ct": "Tasks",
-                        "act_30d": st.column_config.NumberColumn("30d Activity"),
+                        "days_idle": st.column_config.NumberColumn("Days Idle"),
+                        "calls": "Calls", "mtgs": "Mtgs", "emails": "Emails", "tasks": "Tasks",
+                        "a30": st.column_config.NumberColumn("30d"),
                     })
