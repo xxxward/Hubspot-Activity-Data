@@ -1,10 +1,10 @@
 """
 Google Sheets client: authenticate via service account and read tabs as DataFrames.
 
-Credentials come from Streamlit secrets (st.secrets["gcp_service_account"]),
-which works on Streamlit Cloud and locally via .streamlit/secrets.toml.
+Credentials come from Streamlit secrets (st.secrets["gcp_service_account"]).
 
-No .env file or JSON file on disk required.
+NOTE: Coefficient puts headers in row 2 (row 1 is metadata/blank).
+We read all values, skip row 1, and use row 2 as headers.
 """
 
 import logging
@@ -38,19 +38,11 @@ def _get_tab_name(key: str) -> str:
 
 
 def _build_client() -> gspread.Client:
-    """
-    Build gspread client from Streamlit secrets.
-
-    Expects st.secrets["gcp_service_account"] with the full service-account
-    JSON fields (type, project_id, private_key, client_email, etc.).
-    """
     try:
         sa_info = st.secrets["gcp_service_account"]
     except KeyError:
         raise EnvironmentError(
-            "Streamlit secret 'gcp_service_account' not found. "
-            "Add your service account JSON under [gcp_service_account] "
-            "in .streamlit/secrets.toml or in Streamlit Cloud app settings."
+            "Streamlit secret 'gcp_service_account' not found."
         )
     creds = Credentials.from_service_account_info(dict(sa_info), scopes=SCOPES)
     client = gspread.authorize(creds)
@@ -62,24 +54,44 @@ def _get_spreadsheet_id() -> str:
     try:
         return st.secrets["SPREADSHEET_ID"]
     except KeyError:
-        raise EnvironmentError(
-            "Streamlit secret 'SPREADSHEET_ID' not found. "
-            "Add SPREADSHEET_ID to your secrets."
-        )
+        raise EnvironmentError("Streamlit secret 'SPREADSHEET_ID' not found.")
 
 
 def _read_tab(spreadsheet: gspread.Spreadsheet, tab_name: str) -> pd.DataFrame:
-    """Read one worksheet tab -> DataFrame. Returns empty DF on failure."""
+    """
+    Read one worksheet tab into a DataFrame.
+
+    Coefficient places headers in row 2, so we:
+      1. get_all_values() to grab the raw grid
+      2. Use row index 1 (second row) as column headers
+      3. Data starts from row index 2 onward
+      4. Drop any columns with blank headers
+    """
     try:
         ws = spreadsheet.worksheet(tab_name)
     except gspread.exceptions.WorksheetNotFound:
         logger.warning("Tab '%s' not found - returning empty DataFrame.", tab_name)
         return pd.DataFrame()
-    records = ws.get_all_records()
-    if not records:
-        logger.warning("Tab '%s' is empty.", tab_name)
+
+    all_values = ws.get_all_values()
+    if len(all_values) < 3:
+        # Need at least: row 0 (Coefficient meta), row 1 (headers), row 2+ (data)
+        logger.warning("Tab '%s' has fewer than 3 rows - returning empty DataFrame.", tab_name)
         return pd.DataFrame()
-    df = pd.DataFrame(records)
+
+    # Row 1 = headers (index 1), rows 2+ = data
+    headers = all_values[1]
+    data_rows = all_values[2:]
+
+    df = pd.DataFrame(data_rows, columns=headers)
+
+    # Drop columns with blank/empty headers (Coefficient trailing blanks)
+    df = df.loc[:, df.columns != ""]
+    df = df.loc[:, df.columns.notna()]
+
+    # Drop fully empty rows
+    df = df.replace("", pd.NA).dropna(how="all").reset_index(drop=True)
+
     logger.info("Read %d rows x %d cols from '%s'.", len(df), len(df.columns), tab_name)
     return df
 
