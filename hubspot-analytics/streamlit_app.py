@@ -200,6 +200,115 @@ with tab_act:
     else:
         st.info("No daily trend data.")
 
+    # DEBUG section
+    if show_debug:
+        st.divider()
+        st.subheader("DEBUG: Data Diagnostics")
+
+        # Raw data sizes
+        st.markdown(f"**Raw data loaded (after rep filter, before date filter):**")
+        st.markdown(f"- Calls: {len(data.calls):,} rows | Meetings: {len(data.meetings):,} rows | Tasks: {len(data.tasks):,} rows")
+
+        # Calls diagnostics
+        st.markdown("---")
+        st.markdown("**Calls — per-rep breakdown**")
+        calls_rep = _frep(data.calls)
+        debug_rows = []
+        for rep in selected_reps:
+            rep_calls = calls_rep[calls_rep["hubspot_owner_name"] == rep] if not calls_rep.empty and "hubspot_owner_name" in calls_rep.columns else pd.DataFrame()
+
+            total_rep = len(rep_calls)
+            if not rep_calls.empty and "activity_date" in rep_calls.columns:
+                dt = pd.to_datetime(rep_calls["activity_date"], errors="coerce")
+                has_act_date = int(dt.notna().sum())
+                no_act_date = int(dt.isna().sum())
+                in_range_act = int(((dt.dt.date >= start_date) & (dt.dt.date <= end_date)).sum())
+            else:
+                has_act_date = 0
+                no_act_date = total_rep
+                in_range_act = 0
+
+            if not rep_calls.empty and "created_date" in rep_calls.columns:
+                dt2 = pd.to_datetime(rep_calls["created_date"], errors="coerce")
+                in_range_created = int(((dt2.dt.date >= start_date) & (dt2.dt.date <= end_date)).sum())
+            else:
+                in_range_created = 0
+
+            debug_rows.append({
+                "Rep": rep,
+                "Total (all time)": total_rep,
+                "Has activity_date": has_act_date,
+                "Missing activity_date": no_act_date,
+                "In range (activity_date)": in_range_act,
+                "In range (created_date)": in_range_created,
+            })
+        st.dataframe(pd.DataFrame(debug_rows), width="stretch", hide_index=True)
+
+        # Calls date range
+        if not data.calls.empty and "activity_date" in data.calls.columns:
+            dt_all = pd.to_datetime(data.calls["activity_date"], errors="coerce")
+            st.markdown(f"**Calls activity_date range:** {dt_all.min()} to {dt_all.max()}")
+            st.markdown(f"**Null activity_dates:** {dt_all.isna().sum():,} / {len(data.calls):,}")
+
+        if not data.calls.empty and "created_date" in data.calls.columns:
+            dt_cr = pd.to_datetime(data.calls["created_date"], errors="coerce")
+            st.markdown(f"**Calls created_date range:** {dt_cr.min()} to {dt_cr.max()}")
+
+        # Meetings diagnostics
+        st.markdown("---")
+        st.markdown("**Meetings — per-rep breakdown**")
+        mtg_rep = _frep(data.meetings)
+        mtg_debug = []
+        for rep in selected_reps:
+            rep_mtg = mtg_rep[mtg_rep["hubspot_owner_name"] == rep] if not mtg_rep.empty and "hubspot_owner_name" in mtg_rep.columns else pd.DataFrame()
+
+            total_rep = len(rep_mtg)
+            for dcol in ("meeting_start_time", "activity_date", "created_date"):
+                if not rep_mtg.empty and dcol in rep_mtg.columns:
+                    dt = pd.to_datetime(rep_mtg[dcol], errors="coerce")
+                    in_range = int(((dt.dt.date >= start_date) & (dt.dt.date <= end_date)).sum())
+                    break
+            else:
+                in_range = 0
+
+            has_gong = 0
+            if not rep_mtg.empty and "has_gong" in rep_mtg.columns:
+                has_gong = int(rep_mtg["has_gong"].sum())
+
+            mtg_debug.append({
+                "Rep": rep,
+                "Total (all time)": total_rep,
+                "In date range": in_range,
+                "Has Gong": has_gong,
+            })
+        st.dataframe(pd.DataFrame(mtg_debug), width="stretch", hide_index=True)
+
+        # Sample of Owen's calls to check UID mapping
+        st.markdown("---")
+        st.markdown("**Sample: Owen Labombard's calls (first 5 in date range)**")
+        owen_calls = filt_calls[filt_calls["hubspot_owner_name"] == "Owen Labombard"] if not filt_calls.empty and "hubspot_owner_name" in filt_calls.columns else pd.DataFrame()
+        if not owen_calls.empty:
+            show_cols = [c for c in ("activity_date", "created_date", "call_outcome", "call_direction",
+                                     "call_duration", "call_and_meeting_type", "company_name",
+                                     "hubspot_owner_name", "activity_assigned_to") if c in owen_calls.columns]
+            st.dataframe(owen_calls[show_cols].head(5), width="stretch", hide_index=True)
+        else:
+            st.warning("No calls found for Owen in date range.")
+
+        # Check call_and_meeting_type distribution
+        st.markdown("---")
+        st.markdown("**Call types distribution (in date range, all reps)**")
+        if not filt_calls.empty and "call_and_meeting_type" in filt_calls.columns:
+            type_counts = filt_calls["call_and_meeting_type"].value_counts().reset_index()
+            type_counts.columns = ["Type", "Count"]
+            st.dataframe(type_counts, width="stretch", hide_index=True)
+
+        # Check call_direction distribution
+        if not filt_calls.empty and "call_direction" in filt_calls.columns:
+            dir_counts = filt_calls["call_direction"].value_counts().reset_index()
+            dir_counts.columns = ["Direction", "Count"]
+            st.dataframe(dir_counts, width="stretch", hide_index=True)
+
 
 # -- Tab 2: Pipeline -------------------------------------------------------
 
