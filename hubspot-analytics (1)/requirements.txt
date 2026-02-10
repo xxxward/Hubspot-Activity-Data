@@ -1,6 +1,0 @@
-pandas>=2.0
-numpy>=1.24
-gspread>=5.10
-google-auth>=2.22
-streamlit>=1.28
-pytz>=2023.3
