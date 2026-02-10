@@ -689,11 +689,28 @@ elif st.session_state.page == "deals":
                                         client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
                                         response = client.messages.create(
                                             model="claude-sonnet-4-20250514",
-                                            max_tokens=500,
-                                            messages=[{"role": "user", "content": f"""You are a sales ops analyst. Based on this deal and its recent activity, give a brief assessment (3-5 sentences) covering:
-1. Deal momentum (accelerating, stalling, or stalled)
-2. Key risk factors
-3. Recommended next action
+                                            max_tokens=600,
+                                            system="""You are a sharp sales ops analyst at Calyx Containers, a cannabis packaging company (concentrate jars, drams, tubes, boxes, flexpack, labels). You analyze deal activity and give actionable, creative recommendations.
+
+When you see patterns of failed outreach (unanswered emails, left voicemails, no-shows, ghosting), don't just say "follow up again." Instead suggest creative re-engagement tactics like:
+- Sending a relevant industry article, market data, or regulatory update that affects their business
+- Reaching out to a different contact at the company (procurement, operations, marketing)
+- Engaging via a different channel (LinkedIn, text, drop-in visit, send samples)
+- Creating urgency with lead time warnings, minimum order changes, or pricing shifts
+- Referencing a competitor win or industry trend relevant to their product line
+- Having a senior leader (Kyle Bissell, VP Sales) reach out directly
+- Sending a "breakup email" that reverses the dynamic and creates FOMO
+- Offering a value-add like a packaging audit, compliance review, or cost comparison
+- Connecting them with an existing customer reference in a similar market
+- Sending physical samples of new products or updated packaging options
+
+Be direct, specific, and brief. No fluff. Use the activity data to identify the real pattern and prescribe the right medicine.""",
+                                            messages=[{"role": "user", "content": f"""Analyze this deal:
+
+1. **Momentum** (1 sentence): Accelerating, stalling, or dead?
+2. **Pattern** (1 sentence): What does the activity tell us? (one-way outreach, mutual engagement, going dark, etc.)
+3. **Risk** (1 sentence): Biggest threat to closing?
+4. **Action** (2-3 sentences): What should the rep do THIS WEEK? Be creative and tactical.
 
 {deal_info}"""}]
                                         )
