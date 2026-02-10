@@ -28,6 +28,7 @@ DEFAULT_TABS: dict[str, str] = {
     "tickets": "Tickets",
     "calls": "Calls",
     "emails": "Emails",
+    "notes": "Notes",
 }
 
 
