@@ -285,10 +285,17 @@ if st.session_state.page == "activity":
 
     fm = _fdate_raw(_frep(data.meetings), "meeting_start_time")
     fc = _fdate_raw(_frep(data.calls), "activity_date")
-    ft = _fdate_raw(_frep(data.tasks), "completed_at")
     fe = _fdate_raw(_frep(data.emails), "activity_date")
     fn = _fdate_raw(_frep(data.notes), "activity_date")
     fk = _fdate_raw(_frep(data.tickets), "created_date")
+
+    # Tasks: filter by due_date so we capture overdue (incomplete) tasks too
+    ft_all = _frep(data.tasks)
+    if not ft_all.empty and "due_date" in ft_all.columns:
+        due_dt = pd.to_datetime(ft_all["due_date"], errors="coerce")
+        ft = ft_all[due_dt.notna() & (due_dt.dt.date >= start_date) & (due_dt.dt.date <= end_date)].copy()
+    else:
+        ft = _fdate_raw(ft_all, "completed_at")
     total = len(fm) + len(fc) + len(ft) + len(fe) + len(fn) + len(fk)
 
     kpi([
@@ -437,18 +444,36 @@ elif st.session_state.page == "deals":
 
     deals_f = _frep(_fpipe(data.deals))
     active = deals_f[~deals_f["is_terminal"]].copy() if "is_terminal" in deals_f.columns else deals_f.copy()
-    am, ac, at, ae, an = _frep(data.meetings), _frep(data.calls), _frep(data.tasks), _frep(data.emails), _frep(data.notes)
+
+    # For deal health: use ALL activity (not rep-filtered) — any touch on the account matters
+    all_meetings = data.meetings
+    all_calls = data.calls
+    all_tasks = data.tasks
+    all_emails = data.emails
+    all_notes = data.notes
+    all_tickets = data.tickets
+
+    # Also keep rep-filtered notes for display
+    an = _frep(data.notes)
 
     if active.empty:
         st.info("No active deals.")
     else:
-        # Activity by company
+        # Activity by company — ALL activity types, ALL users (not just reps)
+        ak = all_tickets
         frames = []
-        for df, typ, dc in [(ac, "Call", "activity_date"), (am, "Meeting", "meeting_start_time"), (at, "Task", "completed_at"), (ae, "Email", "activity_date"), (an, "Note", "activity_date")]:
+        for df, typ, dc in [(all_calls, "Call", "activity_date"), (all_meetings, "Meeting", "meeting_start_time"),
+                            (all_tasks, "Task", "due_date"), (all_emails, "Email", "activity_date"),
+                            (all_notes, "Note", "activity_date"), (ak, "Ticket", "created_date")]:
             if df.empty or "company_name" not in df.columns: continue
             t = df[["company_name"]].copy()
             t["_dt"] = pd.to_datetime(df[dc], errors="coerce") if dc in df.columns else pd.NaT
             t["_tp"] = typ
+            # Tag whether this activity is from one of our reps
+            if "hubspot_owner_name" in df.columns:
+                t["_is_rep"] = df["hubspot_owner_name"].isin(REPS_IN_SCOPE)
+            else:
+                t["_is_rep"] = False
             frames.append(t)
 
         now = pd.Timestamp.now()
@@ -457,6 +482,8 @@ elif st.session_state.page == "deals":
         if frames:
             aa = pd.concat(frames, ignore_index=True).dropna(subset=["company_name"])
             aa["_co"] = aa["company_name"].astype(str).str.strip().str.lower()
+            # Remove empty strings
+            aa = aa[aa["_co"] != ""]
             cs = aa.groupby("_co").agg(
                 last_act=("_dt", "max"), total=("_dt", "count"),
                 a7=("_dt", lambda x: (x >= d7).sum()), a30=("_dt", lambda x: (x >= d30).sum()),
@@ -465,14 +492,19 @@ elif st.session_state.page == "deals":
                 emails=("_tp", lambda x: (x == "Email").sum()),
                 tasks=("_tp", lambda x: (x == "Task").sum()),
                 notes=("_tp", lambda x: (x == "Note").sum()),
+                tickets=("_tp", lambda x: (x == "Ticket").sum()),
+                rep_activity=("_is_rep", "sum"),
+                other_activity=("_is_rep", lambda x: (~x).sum()),
             ).reset_index()
         else:
             cs = pd.DataFrame(columns=["_co"])
 
+        # Join deals to activity by company name
         active["_co"] = active["company_name"].astype(str).str.strip().str.lower() if "company_name" in active.columns else ""
+
         mg = active.merge(cs, on="_co", how="left")
 
-        for col in ["total", "a7", "a30", "calls", "mtgs", "emails", "tasks", "notes"]:
+        for col in ["total", "a7", "a30", "calls", "mtgs", "emails", "tasks", "notes", "tickets", "rep_activity", "other_activity"]:
             if col in mg.columns: mg[col] = mg[col].fillna(0).astype(int)
 
         mg["health"] = mg.get("last_act", pd.Series(dtype="datetime64[ns]")).apply(
@@ -482,6 +514,13 @@ elif st.session_state.page == "deals":
             lambda x: (now - x).days if pd.notna(x) else None
         )
 
+        # ── Match quality diagnostic ──
+        matched = mg[mg["total"] > 0]
+        unmatched = mg[mg["total"] == 0]
+        deal_cos = set(mg["_co"].unique()) - {""}
+        act_cos = set(cs["_co"].unique()) if not cs.empty and "_co" in cs.columns else set()
+        overlap = deal_cos & act_cos
+
         na = len(mg[mg["health"] == "Active"])
         nw = len(mg) - na
         kpi([
@@ -489,6 +528,7 @@ elif st.session_state.page == "deals":
             ("Pipeline", f"${mg['amount'].sum():,.0f}" if "amount" in mg.columns else "$0", "blue"),
             ("Engaged 7d", f"{na}", "green"),
             ("Needs Attention", f"{nw}", "red"),
+            ("Company Match", f"{len(matched)}/{len(mg)}", ""),
         ])
 
         # Health + Flagged
@@ -529,7 +569,8 @@ elif st.session_state.page == "deals":
             with st.expander(f"**{rep}**  ·  {n} deals  ·  ${v:,.0f}  ·  {nok} active  ·  {n - nok} attention"):
                 sc = [c for c in ("deal_name", "company_name", "deal_stage", "forecast_category",
                                   "amount", "close_date", "health", "days_idle",
-                                  "calls", "mtgs", "emails", "notes", "tasks", "a30") if c in rd.columns]
+                                  "rep_activity", "other_activity",
+                                  "calls", "mtgs", "emails", "notes", "tickets", "tasks", "a30") if c in rd.columns]
                 disp = _safe_sort(rd[sc].copy(), "days_idle")
                 if "deal_id" in rd.columns:
                     disp = disp.copy()
@@ -540,7 +581,9 @@ elif st.session_state.page == "deals":
                         "amount": st.column_config.NumberColumn("Amount", format="$%,.0f"),
                         "days_idle": st.column_config.NumberColumn("Days Idle"),
                         "calls": "Calls", "mtgs": "Mtgs", "emails": "Emails",
-                        "notes": "Notes", "tasks": "Tasks",
+                        "notes": "Notes", "tickets": "Tickets", "tasks": "Tasks",
+                        "rep_activity": st.column_config.NumberColumn("Rep Acts"),
+                        "other_activity": st.column_config.NumberColumn("Other Acts"),
                         "a30": st.column_config.NumberColumn("30d"),
                     })
 
@@ -548,9 +591,20 @@ elif st.session_state.page == "deals":
                 rep_notes = an[an["hubspot_owner_name"] == rep] if not an.empty and "hubspot_owner_name" in an.columns else pd.DataFrame()
                 if not rep_notes.empty and "deal_name" in rep_notes.columns:
                     deal_names = set(rd["deal_name"].dropna().astype(str)) if "deal_name" in rd.columns else set()
-                    matched = rep_notes[rep_notes["deal_name"].astype(str).isin(deal_names)]
-                    if not matched.empty:
+                    matched_notes = rep_notes[rep_notes["deal_name"].astype(str).isin(deal_names)]
+                    if not matched_notes.empty:
                         st.markdown("**📝 Recent Notes**")
-                        note_cols = [c for c in ("activity_date", "deal_name", "company_name", "note_body") if c in matched.columns]
-                        st.dataframe(_display_df(_safe_sort(matched[note_cols].copy(), note_cols[0])),
+                        note_cols = [c for c in ("activity_date", "deal_name", "company_name", "note_body") if c in matched_notes.columns]
+                        st.dataframe(_display_df(_safe_sort(matched_notes[note_cols].copy(), note_cols[0])),
                                      use_container_width=True, hide_index=True)
+
+        # Diagnostic: company name match quality
+        with st.expander("🔍 Company Name Match Diagnostics"):
+            st.markdown(f"**Deals with activity match:** {len(matched)} / {len(mg)}")
+            st.markdown(f"**Unique companies in deals:** {len(deal_cos)}")
+            st.markdown(f"**Unique companies in activity:** {len(act_cos)}")
+            st.markdown(f"**Overlapping companies:** {len(overlap)}")
+            if not unmatched.empty:
+                st.markdown("**Unmatched deal companies** (no activity found):")
+                unmatched_cos = unmatched[["company_name", "deal_name", "hubspot_owner_name"]].drop_duplicates() if all(c in unmatched.columns for c in ("company_name", "deal_name", "hubspot_owner_name")) else unmatched[["_co"]].drop_duplicates()
+                st.dataframe(unmatched_cos.head(30), use_container_width=True, hide_index=True)
