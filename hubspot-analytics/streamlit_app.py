@@ -289,13 +289,18 @@ if st.session_state.page == "activity":
     fn = _fdate_raw(_frep(data.notes), "activity_date")
     fk = _fdate_raw(_frep(data.tickets), "created_date")
 
-    # Tasks: filter by due_date so we capture overdue (incomplete) tasks too
+    # Tasks: try activity_date first, then created_date, then due_date
     ft_all = _frep(data.tasks)
-    if not ft_all.empty and "due_date" in ft_all.columns:
-        due_dt = pd.to_datetime(ft_all["due_date"], errors="coerce")
-        ft = ft_all[due_dt.notna() & (due_dt.dt.date >= start_date) & (due_dt.dt.date <= end_date)].copy()
+    if not ft_all.empty:
+        # Build best available date column
+        task_dt = pd.Series(pd.NaT, index=ft_all.index)
+        for try_col in ("activity_date", "created_date", "due_date", "completed_at"):
+            if try_col in ft_all.columns:
+                candidate = pd.to_datetime(ft_all[try_col], errors="coerce")
+                task_dt = task_dt.fillna(candidate)
+        ft = ft_all[task_dt.notna() & (task_dt.dt.date >= start_date) & (task_dt.dt.date <= end_date)].copy()
     else:
-        ft = _fdate_raw(ft_all, "completed_at")
+        ft = ft_all
     total = len(fm) + len(fc) + len(ft) + len(fe) + len(fn) + len(fk)
 
     kpi([
@@ -467,7 +472,7 @@ elif st.session_state.page == "deals":
         activity_sources = [
             (all_calls, "Call", "activity_date"),
             (all_meetings, "Meeting", "meeting_start_time"),
-            (all_tasks, "Task", "due_date"),
+            (all_tasks, "Task", None),  # special handling — use best available date
             (all_emails, "Email", "activity_date"),
             (all_notes, "Note", "activity_date"),
             (all_tickets, "Ticket", "created_date"),
@@ -479,7 +484,21 @@ elif st.session_state.page == "deals":
             t = pd.DataFrame()
             t["company_name"] = df["company_name"].astype(str).str.strip() if "company_name" in df.columns else ""
             t["deal_name"] = df["deal_name"].astype(str).str.strip() if "deal_name" in df.columns else ""
-            t["_dt"] = pd.to_datetime(df[dc], errors="coerce") if dc in df.columns else pd.NaT
+
+            # For tasks: try activity_date first, then created_date, then due_date
+            if typ == "Task":
+                dt = pd.NaT
+                for try_col in ("activity_date", "created_date", "due_date", "completed_at"):
+                    if try_col in df.columns:
+                        candidate = pd.to_datetime(df[try_col], errors="coerce")
+                        if dt is pd.NaT:
+                            dt = candidate
+                        else:
+                            # Fill NaTs with this column
+                            dt = dt.fillna(candidate)
+                t["_dt"] = dt if not isinstance(dt, type(pd.NaT)) else pd.NaT
+            else:
+                t["_dt"] = pd.to_datetime(df[dc], errors="coerce") if dc in df.columns else pd.NaT
             t["_tp"] = typ
             t["_is_rep"] = df["hubspot_owner_name"].isin(REPS_IN_SCOPE) if "hubspot_owner_name" in df.columns else False
             # Grab summary fields for AI analysis
