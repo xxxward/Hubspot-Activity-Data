@@ -12,3 +12,5 @@ plotly>=5.18.0
 # Date/Time
 python-dateutil>=2.8.2
 pytz>=2023.3
+# AI Analysis
+anthropic>=0.39.0
