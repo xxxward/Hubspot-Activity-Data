@@ -1,13 +1,17 @@
 """
-Column normalization: snake_case conversion, alias mapping to canonical names,
-date/numeric coercion, whitespace cleanup.
+Column normalization: snake_case conversion, alias mapping, type coercion.
 
-The COLUMN_ALIASES dict maps raw Coefficient column names (after snake_case)
-to the canonical internal names used throughout the codebase.
+Also handles:
+  - Coefficient row-2 headers (handled in sheets_client)
+  - Duplicate column deduplication
+  - HubSpot User ID -> Rep Name mapping (built from Meetings tab)
+  - Meeting deduplication ([Gong], Google Meet:, blank-name merging)
 """
 
 import re
 import logging
+from collections import defaultdict
+from datetime import datetime
 
 import pandas as pd
 import numpy as np
@@ -24,103 +28,34 @@ def to_snake_case(name: str) -> str:
 
 
 # -- Column alias map ----------------------------------------------------
-# Keys   = snake_case of the raw Coefficient header
-# Values = canonical internal name
 
 COLUMN_ALIASES: dict[str, str] = {
-    # -- Deals tab --
-    "deal_id": "deal_id",
-    "deal_name": "deal_name",
-    "first_name": "first_name",
-    "last_name": "last_name",
+    # Deals
     "create_date": "created_date",
-    "close_date": "close_date",
-    "deal_stage": "deal_stage",
-    "is_deal_closed?": "is_deal_closed",
-    "is_deal_closed": "is_deal_closed",
-    "is_closed_won": "is_closed_won",
-    "forecast_category": "forecast_category",
-    "forecast_probability": "forecast_probability",
-    "deal_owner_email": "deal_owner_email",
-    "billing_type": "billing_type",
-    "deal_type": "deal_type",
     "associated_company_name": "company_name",
-    "industry": "industry",
-    "state_region": "state_region",
-    "country_region": "country_region",
-    "original_source_type": "original_source_type",
-    "latest_traffic_source": "latest_traffic_source",
-    "next_step": "next_step",
     "hub_spot_team": "hubspot_team",
-    "hubspot_team": "hubspot_team",
-    "opp_age": "opp_age",
     "opp_owner": "hubspot_owner_name",
-    "sales_team": "sales_team",
     "opp_type_no_blanks": "opp_type",
-    "opp_type": "opp_type",
-    "hubspot_opp_url": "hubspot_opp_url",
-    "opp_name_hyperlinked": "opp_name_hyperlinked",
-    "pipeline": "pipeline",
-
-    # -- Meetings tab --
-    "activity_date": "activity_date",
-    "body_preview_truncated": "body_preview",
-    "meeting_start_time": "meeting_start_time",
-    "meeting_end_time": "meeting_end_time",
-    "meeting_name": "meeting_name",
-    "call_and_meeting_type": "call_and_meeting_type",
-    "meeting_source": "meeting_source",
-    "email": "email",
-    "company_name": "company_name",
-    "type": "type",
-    "company_id": "company_id",
-    "meeting_outcome": "meeting_outcome",
-    "activity_assigned_to": "hubspot_owner_name",
+    "is_deal_closed?": "is_deal_closed",
+    # Meetings
+    "activity_assigned_to": "activity_assigned_to",
     "activity_created_by": "activity_created_by",
-    "follow_up_action": "follow_up_action",
-
-    # -- Tasks tab --
-    "for_object_type": "for_object_type",
-    "completed_at": "completed_at",
-    "task_title": "task_title",
-    "due_date": "due_date",
-    "task_status": "task_status",
-    "source": "source",
-    "notes_preview": "notes_preview",
+    "body_preview_truncated": "body_preview",
+    # Tasks
     "created_at": "created_date",
-    "priority": "priority",
-    "task_type": "task_type",
-    "full_name": "full_name",
+    "completed_at": "completed_at",
     "last_modified_at": "last_modified_date",
-
-    # -- Calls tab --
-    "call_id": "call_id",
-    "call_outcome": "call_outcome",
-    "call_duration": "call_duration",
+    "notes_preview": "notes_preview",
+    # Calls
     "last_modified_date": "last_modified_date",
-    "call_title": "call_title",
-    "call_notes": "call_notes",
-    "call_status": "call_status",
-    "call_direction": "call_direction",
-    "call_summary": "call_summary",
-    "company_owner": "company_owner",
-
-    # -- Tickets tab --
-    "ticket_id": "ticket_id",
-    "ticket_name": "ticket_name",
-    "ticket_status": "ticket_status",
-    "ticket_description": "ticket_description",
-    "deal_owner": "deal_owner",
+    # Tickets
     "first_name_ticket_owner": "ticket_owner_first_name",
 }
-
-
-# -- Date & numeric detection --------------------------------------------
 
 DATE_COLUMNS = {
     "created_date", "close_date", "activity_date", "meeting_start_time",
     "meeting_end_time", "completed_at", "due_date", "last_modified_date",
-    "create_date", "created_at", "last_activity_date", "next_activity_date",
+    "create_date", "last_activity_date", "next_activity_date",
 }
 
 NUMERIC_COLUMNS = {
@@ -129,14 +64,239 @@ NUMERIC_COLUMNS = {
 }
 
 
-# -- Public API -----------------------------------------------------------
+# -- HubSpot User ID -> Rep Name mapping ---------------------------------
+
+# Hardcoded confirmed mapping (from the Meetings Rosetta Stone)
+HUBSPOT_UID_TO_NAME: dict[str, str] = {
+    "56564763": "Alex Gonzalez",
+    "56562506": "Brad Sherman",
+    "119721604": "Dave Borkowski",
+    "56564944": "Jake Lynch",
+    "79617483": "Lance Mitton",
+    "85412002": "Owen Labombard",
+}
+
+
+def _clean_uid(val) -> str:
+    """Clean a HubSpot User ID value — handle float, int, string forms."""
+    if pd.isna(val) or val == "" or val is None:
+        return ""
+    s = str(val).strip()
+    # Strip .0 suffix from float representation
+    if s.endswith(".0"):
+        s = s[:-2]
+    return s
+
+
+def build_uid_map_from_meetings(meetings_df: pd.DataFrame) -> dict[str, str]:
+    """
+    Build User ID -> Name mapping from the Meetings tab.
+    Falls back to hardcoded map if meetings data is insufficient.
+    """
+    from src.parsing.filters import REPS_IN_SCOPE
+
+    uid_map = dict(HUBSPOT_UID_TO_NAME)  # start with known mapping
+
+    if meetings_df.empty:
+        return uid_map
+
+    # Try to enrich from the actual meetings data
+    first_col = "first_name" if "first_name" in meetings_df.columns else None
+    last_col = "last_name" if "last_name" in meetings_df.columns else None
+    uid_col = "activity_assigned_to" if "activity_assigned_to" in meetings_df.columns else None
+
+    if first_col and last_col and uid_col:
+        for _, row in meetings_df.iterrows():
+            first = str(row.get(first_col, "")).strip()
+            last = str(row.get(last_col, "")).strip()
+            name = f"{first} {last}".strip()
+            if name in REPS_IN_SCOPE:
+                uid = _clean_uid(row.get(uid_col))
+                if uid:
+                    uid_map[uid] = name
+
+    logger.info("UID map built with %d entries: %s", len(uid_map), uid_map)
+    return uid_map
+
+
+def apply_owner_mapping(df: pd.DataFrame, uid_map: dict[str, str], tab_type: str) -> pd.DataFrame:
+    """
+    Apply the correct owner mapping strategy per tab type.
+
+    - meetings: First name + Last name = rep name
+    - calls: Activity assigned to (UID) -> name via uid_map
+    - tasks: full_name is already the rep name
+    - tickets: First name + Last name = rep name
+    - deals: hubspot_owner_name already mapped from Opp Owner
+    """
+    if df.empty:
+        return df
+    df = df.copy()
+
+    if tab_type == "meetings":
+        # Build rep name from first + last
+        first = df.get("first_name", pd.Series("", index=df.index)).fillna("").astype(str).str.strip()
+        last = df.get("last_name", pd.Series("", index=df.index)).fillna("").astype(str).str.strip()
+        df["hubspot_owner_name"] = (first + " " + last).str.strip()
+
+    elif tab_type == "calls":
+        # Map UID to name
+        uid_col = "activity_assigned_to" if "activity_assigned_to" in df.columns else "hubspot_owner_name"
+        df["hubspot_owner_name"] = df[uid_col].apply(lambda x: uid_map.get(_clean_uid(x), ""))
+
+    elif tab_type == "tasks":
+        # full_name is the rep
+        if "full_name" in df.columns:
+            df["hubspot_owner_name"] = df["full_name"]
+
+    elif tab_type == "tickets":
+        first = df.get("first_name", pd.Series("", index=df.index)).fillna("").astype(str).str.strip()
+        last = df.get("last_name", pd.Series("", index=df.index)).fillna("").astype(str).str.strip()
+        df["hubspot_owner_name"] = (first + " " + last).str.strip()
+
+    # deals: hubspot_owner_name already set from Opp Owner alias
+    return df
+
+
+# -- Meeting Deduplication ------------------------------------------------
+
+OUTCOME_PRIORITY = {
+    "Completed": 5, "No Show": 4, "Canceled": 3,
+    "Rescheduled": 2, "Scheduled": 1, "": 0
+}
+
+
+def _norm_meeting_name(name: str) -> str:
+    """Strip [Gong] and Google Meet: prefixes."""
+    n = str(name).strip() if pd.notna(name) else ""
+    for prefix in ["[Gong] ", "[Gong]", "Google Meet: ", "Google Meet:"]:
+        if n.startswith(prefix):
+            n = n[len(prefix):]
+    return n.strip()
+
+
+def _safe_str(val) -> str:
+    if pd.isna(val) or val is None:
+        return ""
+    return str(val).strip()
+
+
+def _best_value(values: list[str]) -> str:
+    """Return the longest non-empty string from a list."""
+    non_empty = [v for v in values if v]
+    return max(non_empty, key=len) if non_empty else ""
+
+
+def deduplicate_meetings(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Deduplicate meetings using the three-pattern algorithm:
+    1. [Gong] prefix duplicates
+    2. Google Meet: prefix duplicates
+    3. Blank-name CRM entries matching by date+rep+company
+
+    Groups are merged keeping the richest data.
+    """
+    if df.empty:
+        return df
+
+    # Ensure we have the needed columns
+    name_col = "meeting_name" if "meeting_name" in df.columns else None
+    date_col = "meeting_start_time" if "meeting_start_time" in df.columns else "activity_date"
+    rep_col = "hubspot_owner_name"
+    company_col = "company_name"
+    outcome_col = "meeting_outcome"
+
+    if name_col is None or date_col not in df.columns:
+        logger.warning("Cannot deduplicate meetings — missing columns.")
+        return df
+
+    # Parse dates to just date part for grouping
+    df = df.copy()
+    df["_start_date"] = pd.to_datetime(df[date_col], errors="coerce").dt.date
+
+    # Normalize meeting names
+    df["_norm_name"] = df[name_col].apply(_norm_meeting_name)
+
+    # Check for Gong prefix
+    raw_name = df[name_col].fillna("").astype(str)
+    df["has_gong"] = raw_name.str.startswith("[Gong]")
+
+    # Step 1 & 2: Group named meetings
+    named_groups: dict[tuple, list[int]] = defaultdict(list)
+    blank_indices: list[int] = []
+
+    for idx in df.index:
+        norm = df.at[idx, "_norm_name"]
+        if norm:
+            key = (
+                norm,
+                df.at[idx, "_start_date"],
+                _safe_str(df.at[idx, rep_col]) if rep_col in df.columns else "",
+            )
+            named_groups[key].append(idx)
+        else:
+            blank_indices.append(idx)
+
+    # Step 3: Match blanks to named groups by date+rep+company
+    named_lookup: dict[tuple, tuple] = {}
+    for key, indices in named_groups.items():
+        for idx in indices:
+            comp = _safe_str(df.at[idx, company_col]) if company_col in df.columns else ""
+            if comp:
+                lookup_key = (key[1], key[2], comp)  # date, rep, company
+                named_lookup[lookup_key] = key
+
+    for idx in blank_indices:
+        rep = _safe_str(df.at[idx, rep_col]) if rep_col in df.columns else ""
+        comp = _safe_str(df.at[idx, company_col]) if company_col in df.columns else ""
+        date_val = df.at[idx, "_start_date"]
+        lookup_key = (date_val, rep, comp)
+        if lookup_key in named_lookup:
+            named_groups[named_lookup[lookup_key]].append(idx)
+        else:
+            # Standalone blank — keep as its own group
+            named_groups[("_blank", date_val, rep)].append(idx)
+
+    # Step 4: Merge each group
+    merged_rows = []
+    merge_cols = [c for c in df.columns if not c.startswith("_")]
+
+    for key, indices in named_groups.items():
+        if len(indices) == 1:
+            merged_rows.append(df.loc[indices[0], merge_cols].to_dict())
+            continue
+
+        group = df.loc[indices]
+        merged = {}
+
+        for col in merge_cols:
+            if col == outcome_col:
+                # Use highest priority outcome
+                outcomes = group[col].fillna("").astype(str).tolist()
+                best_outcome = max(outcomes, key=lambda o: OUTCOME_PRIORITY.get(o.strip(), 0))
+                merged[col] = best_outcome
+            elif col == "has_gong":
+                merged[col] = group[col].any()
+            elif col == name_col:
+                # Use the normalized name (without prefixes)
+                merged[col] = key[0] if key[0] != "_blank" else ""
+            else:
+                # Keep longest non-empty value
+                vals = group[col].fillna("").astype(str).tolist()
+                merged[col] = _best_value(vals)
+
+        merged_rows.append(merged)
+
+    result = pd.DataFrame(merged_rows)
+    logger.info("Meeting dedup: %d -> %d rows (removed %d duplicates).",
+                len(df), len(result), len(df) - len(result))
+    return result
+
+
+# -- Column dedup & normalization pipeline --------------------------------
 
 def _deduplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Handle duplicate column names (e.g. Meetings tab has 'Last Activity Date' x2).
-
-    Appends _2, _3 etc. to duplicates so every column name is unique.
-    """
+    """Append _2, _3 etc. to duplicate column names."""
     cols = list(df.columns)
     seen: dict[str, int] = {}
     new_cols = []
@@ -152,14 +312,12 @@ def _deduplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Rename all columns to snake_case, deduplicate, then apply alias mapping."""
     if df.empty:
         return df
     df = df.copy()
     df.columns = [to_snake_case(c) for c in df.columns]
     df = _deduplicate_columns(df)
     df = df.rename(columns=COLUMN_ALIASES)
-    # Drop unnamed/blank columns
     df = df.loc[:, [bool(str(c).strip()) and not str(c).startswith("unnamed") for c in df.columns]]
     return df
 
@@ -185,15 +343,12 @@ def coerce_numerics(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def strip_whitespace(df: pd.DataFrame) -> pd.DataFrame:
-    """Strip whitespace from string columns and convert blanks to NaN."""
     if df.empty:
         return df
     df = df.copy()
     for col in df.columns:
-        # Only process columns that are object (string) dtype
         if df[col].dtype != object:
             continue
-        # Defensive: ensure we have a Series not a DataFrame (from dupes)
         series = df[col]
         if isinstance(series, pd.DataFrame):
             series = series.iloc[:, 0]
@@ -204,10 +359,8 @@ def strip_whitespace(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def safe_column(df: pd.DataFrame, col: str, default=np.nan) -> pd.Series:
-    """Return a column if present, else a constant Series."""
     if col in df.columns:
         result = df[col]
-        # Guard against duplicate columns returning a DataFrame
         if isinstance(result, pd.DataFrame):
             result = result.iloc[:, 0]
         return result
@@ -215,19 +368,12 @@ def safe_column(df: pd.DataFrame, col: str, default=np.nan) -> pd.Series:
 
 
 def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Full normalization pipeline:
-      1. snake_case + deduplicate + alias mapping
-      2. strip whitespace
-      3. coerce dates
-      4. coerce numerics
-    """
+    """Full normalization: snake_case -> dedup cols -> alias -> whitespace -> dates -> numerics."""
     if df.empty:
         return df
     df = normalize_columns(df)
     df = strip_whitespace(df)
     df = coerce_dates(df)
     df = coerce_numerics(df)
-    logger.info("Normalized: %d rows x %d cols.  Columns: %s",
-                len(df), len(df.columns), list(df.columns))
+    logger.info("Normalized: %d rows x %d cols.", len(df), len(df.columns))
     return df
