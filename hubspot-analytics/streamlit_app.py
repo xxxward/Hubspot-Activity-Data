@@ -453,82 +453,130 @@ elif st.session_state.page == "deals":
     all_notes = data.notes
     all_tickets = data.tickets
 
-    # Also keep rep-filtered notes for display
+    # Rep-filtered notes for display
     an = _frep(data.notes)
 
     if active.empty:
         st.info("No active deals.")
     else:
-        # Activity by company — ALL activity types, ALL users (not just reps)
-        ak = all_tickets
-        frames = []
-        for df, typ, dc in [(all_calls, "Call", "activity_date"), (all_meetings, "Meeting", "meeting_start_time"),
-                            (all_tasks, "Task", "due_date"), (all_emails, "Email", "activity_date"),
-                            (all_notes, "Note", "activity_date"), (ak, "Ticket", "created_date")]:
-            if df.empty or "company_name" not in df.columns: continue
-            t = df[["company_name"]].copy()
-            t["_dt"] = pd.to_datetime(df[dc], errors="coerce") if dc in df.columns else pd.NaT
-            t["_tp"] = typ
-            # Tag whether this activity is from one of our reps
-            if "hubspot_owner_name" in df.columns:
-                t["_is_rep"] = df["hubspot_owner_name"].isin(REPS_IN_SCOPE)
-            else:
-                t["_is_rep"] = False
-            frames.append(t)
-
+        # ── Build per-deal activity by matching on BOTH company_name AND deal_name ──
         now = pd.Timestamp.now()
         d7, d30 = now - pd.Timedelta(days=7), now - pd.Timedelta(days=30)
 
+        # Collect all activity with company + deal_name (where available)
+        activity_sources = [
+            (all_calls, "Call", "activity_date"),
+            (all_meetings, "Meeting", "meeting_start_time"),
+            (all_tasks, "Task", "due_date"),
+            (all_emails, "Email", "activity_date"),
+            (all_notes, "Note", "activity_date"),
+            (all_tickets, "Ticket", "created_date"),
+        ]
+
+        frames = []
+        for df, typ, dc in activity_sources:
+            if df.empty: continue
+            t = pd.DataFrame()
+            t["company_name"] = df["company_name"].astype(str).str.strip() if "company_name" in df.columns else ""
+            t["deal_name"] = df["deal_name"].astype(str).str.strip() if "deal_name" in df.columns else ""
+            t["_dt"] = pd.to_datetime(df[dc], errors="coerce") if dc in df.columns else pd.NaT
+            t["_tp"] = typ
+            t["_is_rep"] = df["hubspot_owner_name"].isin(REPS_IN_SCOPE) if "hubspot_owner_name" in df.columns else False
+            # Grab summary fields for AI analysis
+            if typ == "Email" and "email_subject" in df.columns:
+                t["_summary"] = df["email_subject"].astype(str)
+            elif typ == "Note" and "note_body" in df.columns:
+                t["_summary"] = df["note_body"].astype(str).str.replace(r'<[^>]+>', '', regex=True).str[:200]
+            elif typ == "Meeting" and "meeting_name" in df.columns:
+                t["_summary"] = df["meeting_name"].astype(str)
+            elif typ == "Call" and "call_outcome" in df.columns:
+                t["_summary"] = df["call_outcome"].astype(str)
+            elif typ == "Task" and "task_title" in df.columns:
+                t["_summary"] = df["task_title"].astype(str)
+            elif typ == "Ticket" and "ticket_name" in df.columns:
+                t["_summary"] = df["ticket_name"].astype(str)
+            else:
+                t["_summary"] = ""
+            t["_owner"] = df["hubspot_owner_name"].astype(str) if "hubspot_owner_name" in df.columns else ""
+            frames.append(t)
+
         if frames:
-            aa = pd.concat(frames, ignore_index=True).dropna(subset=["company_name"])
-            aa["_co"] = aa["company_name"].astype(str).str.strip().str.lower()
-            # Remove empty strings
-            aa = aa[aa["_co"] != ""]
-            cs = aa.groupby("_co").agg(
-                last_act=("_dt", "max"), total=("_dt", "count"),
-                a7=("_dt", lambda x: (x >= d7).sum()), a30=("_dt", lambda x: (x >= d30).sum()),
-                calls=("_tp", lambda x: (x == "Call").sum()),
-                mtgs=("_tp", lambda x: (x == "Meeting").sum()),
-                emails=("_tp", lambda x: (x == "Email").sum()),
-                tasks=("_tp", lambda x: (x == "Task").sum()),
-                notes=("_tp", lambda x: (x == "Note").sum()),
-                tickets=("_tp", lambda x: (x == "Ticket").sum()),
-                rep_activity=("_is_rep", "sum"),
-                other_activity=("_is_rep", lambda x: (~x).sum()),
-            ).reset_index()
+            all_act = pd.concat(frames, ignore_index=True)
+            all_act["_co"] = all_act["company_name"].astype(str).str.strip().str.lower()
+            all_act["_dn"] = all_act["deal_name"].astype(str).str.strip().str.lower()
         else:
-            cs = pd.DataFrame(columns=["_co"])
+            all_act = pd.DataFrame()
 
-        # Join deals to activity by company name
+        # For each deal, find matching activity by:
+        #   1. company_name match (primary)
+        #   2. deal_name match (secondary — catches notes/tasks linked to deal)
         active["_co"] = active["company_name"].astype(str).str.strip().str.lower() if "company_name" in active.columns else ""
+        active["_dn"] = active["deal_name"].astype(str).str.strip().str.lower() if "deal_name" in active.columns else ""
 
-        mg = active.merge(cs, on="_co", how="left")
+        deal_health_rows = []
+        deal_activity_cache = {}  # cache for AI analysis
 
-        for col in ["total", "a7", "a30", "calls", "mtgs", "emails", "tasks", "notes", "tickets", "rep_activity", "other_activity"]:
-            if col in mg.columns: mg[col] = mg[col].fillna(0).astype(int)
+        for idx, deal in active.iterrows():
+            co = deal["_co"]
+            dn = deal["_dn"]
 
-        mg["health"] = mg.get("last_act", pd.Series(dtype="datetime64[ns]")).apply(
-            lambda x: "Active" if pd.notna(x) and x >= d7 else ("Stale" if pd.notna(x) and x >= d30 else ("Inactive" if pd.notna(x) else "No Activity"))
-        )
-        mg["days_idle"] = mg.get("last_act", pd.Series(dtype="datetime64[ns]")).apply(
-            lambda x: (now - x).days if pd.notna(x) else None
-        )
+            if not all_act.empty:
+                # Match by company OR deal_name
+                mask_co = (all_act["_co"] == co) & (co != "")
+                mask_dn = (all_act["_dn"] == dn) & (dn != "")
+                matched_act = all_act[mask_co | mask_dn].copy()
+            else:
+                matched_act = pd.DataFrame()
 
-        # ── Match quality diagnostic ──
-        matched = mg[mg["total"] > 0]
-        unmatched = mg[mg["total"] == 0]
-        deal_cos = set(mg["_co"].unique()) - {""}
-        act_cos = set(cs["_co"].unique()) if not cs.empty and "_co" in cs.columns else set()
-        overlap = deal_cos & act_cos
+            if not matched_act.empty:
+                last_act = matched_act["_dt"].max()
+                total = len(matched_act)
+                a7 = int((matched_act["_dt"] >= d7).sum())
+                a30 = int((matched_act["_dt"] >= d30).sum())
+                calls = int((matched_act["_tp"] == "Call").sum())
+                mtgs = int((matched_act["_tp"] == "Meeting").sum())
+                emails = int((matched_act["_tp"] == "Email").sum())
+                tasks = int((matched_act["_tp"] == "Task").sum())
+                notes = int((matched_act["_tp"] == "Note").sum())
+                tickets = int((matched_act["_tp"] == "Ticket").sum())
+                rep_act = int(matched_act["_is_rep"].sum())
+                other_act = total - rep_act
+            else:
+                last_act = pd.NaT
+                total = a7 = a30 = calls = mtgs = emails = tasks = notes = tickets = rep_act = other_act = 0
 
+            health = "Active" if pd.notna(last_act) and last_act >= d7 else \
+                     "Stale" if pd.notna(last_act) and last_act >= d30 else \
+                     "Inactive" if pd.notna(last_act) else "No Activity"
+            days_idle = (now - last_act).days if pd.notna(last_act) else None
+
+            row = deal.to_dict()
+            row.update({
+                "last_act": last_act, "total": total, "a7": a7, "a30": a30,
+                "calls": calls, "mtgs": mtgs, "emails": emails, "tasks": tasks,
+                "notes": notes, "tickets": tickets,
+                "rep_activity": rep_act, "other_activity": other_act,
+                "health": health, "days_idle": days_idle,
+            })
+            deal_health_rows.append(row)
+
+            # Cache recent activity for AI analysis (last 30d, max 15 items)
+            if not matched_act.empty:
+                recent = matched_act[matched_act["_dt"] >= d30].sort_values("_dt", ascending=False).head(15)
+                deal_activity_cache[dn] = recent
+
+        mg = pd.DataFrame(deal_health_rows)
+
+        # KPIs
         na = len(mg[mg["health"] == "Active"])
         nw = len(mg) - na
+        matched_deals = mg[mg["total"] > 0]
         kpi([
             ("Active Deals", f"{len(mg):,}", ""),
             ("Pipeline", f"${mg['amount'].sum():,.0f}" if "amount" in mg.columns else "$0", "blue"),
             ("Engaged 7d", f"{na}", "green"),
             ("Needs Attention", f"{nw}", "red"),
-            ("Company Match", f"{len(matched)}/{len(mg)}", ""),
+            ("Company Match", f"{len(matched_deals)}/{len(mg)}", ""),
         ])
 
         # Health + Flagged
@@ -557,16 +605,16 @@ elif st.session_state.page == "deals":
             else:
                 st.success("✅ All forecasted deals have recent activity.")
 
-        # Per-rep
+        # Per-rep deals
         st.markdown('<div class="sec-title">Deals by Rep</div>', unsafe_allow_html=True)
         for rep in selected_reps:
             rd = mg[mg["hubspot_owner_name"] == rep] if "hubspot_owner_name" in mg.columns else pd.DataFrame()
             if rd.empty: continue
-            n = len(rd)
+            n_deals = len(rd)
             v = rd["amount"].sum() if "amount" in rd.columns else 0
             nok = len(rd[rd["health"] == "Active"])
 
-            with st.expander(f"**{rep}**  ·  {n} deals  ·  ${v:,.0f}  ·  {nok} active  ·  {n - nok} attention"):
+            with st.expander(f"**{rep}**  ·  {n_deals} deals  ·  ${v:,.0f}  ·  {nok} active  ·  {n_deals - nok} attention"):
                 sc = [c for c in ("deal_name", "company_name", "deal_stage", "forecast_category",
                                   "amount", "close_date", "health", "days_idle",
                                   "rep_activity", "other_activity",
@@ -582,29 +630,70 @@ elif st.session_state.page == "deals":
                         "days_idle": st.column_config.NumberColumn("Days Idle"),
                         "calls": "Calls", "mtgs": "Mtgs", "emails": "Emails",
                         "notes": "Notes", "tickets": "Tickets", "tasks": "Tasks",
-                        "rep_activity": st.column_config.NumberColumn("Rep Acts"),
-                        "other_activity": st.column_config.NumberColumn("Other Acts"),
+                        "rep_activity": st.column_config.NumberColumn("Rep"),
+                        "other_activity": st.column_config.NumberColumn("Other"),
                         "a30": st.column_config.NumberColumn("30d"),
                     })
 
-                # Show recent notes for this rep's deals
-                rep_notes = an[an["hubspot_owner_name"] == rep] if not an.empty and "hubspot_owner_name" in an.columns else pd.DataFrame()
-                if not rep_notes.empty and "deal_name" in rep_notes.columns:
-                    deal_names = set(rd["deal_name"].dropna().astype(str)) if "deal_name" in rd.columns else set()
-                    matched_notes = rep_notes[rep_notes["deal_name"].astype(str).isin(deal_names)]
-                    if not matched_notes.empty:
-                        st.markdown("**📝 Recent Notes**")
-                        note_cols = [c for c in ("activity_date", "deal_name", "company_name", "note_body") if c in matched_notes.columns]
-                        st.dataframe(_display_df(_safe_sort(matched_notes[note_cols].copy(), note_cols[0])),
-                                     use_container_width=True, hide_index=True)
+                # Per-deal activity timeline + AI analysis
+                for _, deal_row in rd.iterrows():
+                    dn_key = str(deal_row.get("deal_name", "")).strip().lower()
+                    cached = deal_activity_cache.get(dn_key)
+                    if cached is not None and not cached.empty:
+                        with st.expander(f"📋 {deal_row.get('deal_name', 'Unknown')} — Activity Timeline"):
+                            # Show activity timeline
+                            timeline = cached[["_dt", "_tp", "_owner", "_summary"]].copy()
+                            timeline.columns = ["Date", "Type", "By", "Summary"]
+                            timeline["Date"] = pd.to_datetime(timeline["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
+                            timeline["Summary"] = timeline["Summary"].str[:120]
+                            st.dataframe(timeline, use_container_width=True, hide_index=True)
 
-        # Diagnostic: company name match quality
+                            # AI Analysis button
+                            btn_key = f"ai_{rep}_{dn_key}"
+                            if st.button("🤖 Analyze Deal Health", key=btn_key):
+                                with st.spinner("Analyzing..."):
+                                    # Build context for Claude
+                                    deal_info = f"Deal: {deal_row.get('deal_name', '')}\n"
+                                    deal_info += f"Company: {deal_row.get('company_name', '')}\n"
+                                    deal_info += f"Rep: {rep}\n"
+                                    deal_info += f"Stage: {deal_row.get('deal_stage', '')}\n"
+                                    deal_info += f"Forecast: {deal_row.get('forecast_category', '')}\n"
+                                    deal_info += f"Amount: ${deal_row.get('amount', 0):,.0f}\n"
+                                    deal_info += f"Close Date: {deal_row.get('close_date', '')}\n\n"
+                                    deal_info += "Recent Activity (last 30 days):\n"
+                                    for _, act in cached.iterrows():
+                                        dt_str = act["_dt"].strftime("%m/%d") if pd.notna(act["_dt"]) else "?"
+                                        deal_info += f"- {dt_str} | {act['_tp']} | {act['_owner']} | {act['_summary']}\n"
+
+                                    try:
+                                        import anthropic
+                                        client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+                                        response = client.messages.create(
+                                            model="claude-sonnet-4-20250514",
+                                            max_tokens=500,
+                                            messages=[{"role": "user", "content": f"""You are a sales ops analyst. Based on this deal and its recent activity, give a brief assessment (3-5 sentences) covering:
+1. Deal momentum (accelerating, stalling, or stalled)
+2. Key risk factors
+3. Recommended next action
+
+{deal_info}"""}]
+                                        )
+                                        st.markdown(response.content[0].text)
+                                    except Exception as e:
+                                        st.warning(f"AI analysis unavailable: {e}")
+
+        # Diagnostics
+        unmatched = mg[mg["total"] == 0]
+        deal_cos = set(mg["_co"].unique()) - {""}
+        act_cos = set(all_act["_co"].unique()) - {""} if not all_act.empty else set()
+        overlap = deal_cos & act_cos
         with st.expander("🔍 Company Name Match Diagnostics"):
-            st.markdown(f"**Deals with activity match:** {len(matched)} / {len(mg)}")
+            st.markdown(f"**Deals with activity match:** {len(matched_deals)} / {len(mg)}")
             st.markdown(f"**Unique companies in deals:** {len(deal_cos)}")
             st.markdown(f"**Unique companies in activity:** {len(act_cos)}")
             st.markdown(f"**Overlapping companies:** {len(overlap)}")
             if not unmatched.empty:
                 st.markdown("**Unmatched deal companies** (no activity found):")
-                unmatched_cos = unmatched[["company_name", "deal_name", "hubspot_owner_name"]].drop_duplicates() if all(c in unmatched.columns for c in ("company_name", "deal_name", "hubspot_owner_name")) else unmatched[["_co"]].drop_duplicates()
-                st.dataframe(unmatched_cos.head(30), use_container_width=True, hide_index=True)
+                unmatched_cos = unmatched[["company_name", "deal_name", "hubspot_owner_name"]].drop_duplicates() if all(c in unmatched.columns for c in ("company_name", "deal_name", "hubspot_owner_name")) else pd.DataFrame()
+                if not unmatched_cos.empty:
+                    st.dataframe(unmatched_cos.head(30), use_container_width=True, hide_index=True)
