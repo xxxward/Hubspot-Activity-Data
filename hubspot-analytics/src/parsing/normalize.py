@@ -48,6 +48,19 @@ COLUMN_ALIASES: dict[str, str] = {
     "notes_preview": "notes_preview",
     # Calls
     "last_modified_date": "last_modified_date",
+    # Emails
+    "email_id": "email_id",
+    "email_from_address": "email_from_address",
+    "email_to_address": "email_to_address",
+    "number_of_email_opens": "email_opens",
+    "number_of_email_clicks": "email_clicks",
+    "number_of_email_replies": "email_replies",
+    "email_open_rate": "email_open_rate",
+    "email_click_rate": "email_click_rate",
+    "email_reply_rate": "email_reply_rate",
+    "email_cc_address": "email_cc_address",
+    "first_name_activity_assigned_to": "owner_first_name",
+    "last_name_activity_assigned_to": "owner_last_name",
     # Tickets
     "first_name_ticket_owner": "ticket_owner_first_name",
 }
@@ -148,6 +161,25 @@ def apply_owner_mapping(df: pd.DataFrame, uid_map: dict[str, str], tab_type: str
         # full_name is the rep
         if "full_name" in df.columns:
             df["hubspot_owner_name"] = df["full_name"]
+
+    elif tab_type == "emails":
+        # Emails have first_name/last_name (Activity assigned to) and activity_assigned_to (UID)
+        # Build name from first + last name columns, or map UID
+        REP_LAST_NAMES = {"Sherman", "Labombard", "Lynch", "Borkowski", "Gonzalez", "Mitton"}
+
+        # Try owner_first_name + owner_last_name first (from "First name (Activity assigned to)" etc)
+        first_col = "owner_first_name" if "owner_first_name" in df.columns else "first_name"
+        last_col = "owner_last_name" if "owner_last_name" in df.columns else "last_name"
+
+        if first_col in df.columns and last_col in df.columns:
+            first = df[first_col].fillna("").astype(str).str.strip()
+            last = df[last_col].fillna("").astype(str).str.strip()
+            df["hubspot_owner_name"] = (first + " " + last).str.strip()
+            # Filter to only our reps by last name
+            df = df[df[last_col].astype(str).str.strip().isin(REP_LAST_NAMES)].copy()
+        elif "activity_assigned_to" in df.columns:
+            df["hubspot_owner_name"] = df["activity_assigned_to"].apply(lambda x: uid_map.get(_clean_uid(x), ""))
+        logger.info("Emails owner mapping: %d rows after filtering to reps.", len(df))
 
     elif tab_type == "tickets":
         first = df.get("first_name", pd.Series("", index=df.index)).fillna("").astype(str).str.strip()
