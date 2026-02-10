@@ -148,7 +148,7 @@ for p in ["Rep Activity", "Deal Health Monitor"]:
 st.sidebar.markdown("---")
 st.sidebar.caption(
     f"{len(data.deals)} deals · {len(data.calls)} calls · "
-    f"{len(data.meetings)} mtgs · {len(data.tasks)} tasks"
+    f"{len(data.meetings)} mtgs · {len(data.emails)} emails · {len(data.tasks)} tasks"
 )
 
 
@@ -222,12 +222,14 @@ if st.session_state.page == "Rep Activity":
     filt_meetings = _fdate_raw(_frep(data.meetings), "meeting_start_time")
     filt_calls = _fdate_raw(_frep(data.calls), "activity_date")
     filt_tasks = _fdate_raw(_frep(data.tasks), "completed_at")
-    total = len(filt_meetings) + len(filt_calls) + len(filt_tasks)
+    filt_emails = _fdate_raw(_frep(data.emails), "activity_date")
+    total = len(filt_meetings) + len(filt_calls) + len(filt_tasks) + len(filt_emails)
 
     kpi_html([
         ("Total Activities", f"{total:,}", ""),
         ("Meetings", f"{len(filt_meetings):,}", "kpi-green"),
         ("Calls", f"{len(filt_calls):,}", "kpi-blue"),
+        ("Emails", f"{len(filt_emails):,}", "kpi-amber"),
         ("Tasks", f"{len(filt_tasks):,}", "kpi-amber"),
     ])
 
@@ -238,6 +240,7 @@ if st.session_state.page == "Rep Activity":
     for rep in selected_reps:
         m = len(filt_meetings[filt_meetings["hubspot_owner_name"] == rep]) if not filt_meetings.empty and "hubspot_owner_name" in filt_meetings.columns else 0
         c = len(filt_calls[filt_calls["hubspot_owner_name"] == rep]) if not filt_calls.empty and "hubspot_owner_name" in filt_calls.columns else 0
+        e = len(filt_emails[filt_emails["hubspot_owner_name"] == rep]) if not filt_emails.empty and "hubspot_owner_name" in filt_emails.columns else 0
         comp, over = 0, 0
         if not filt_tasks.empty and "hubspot_owner_name" in filt_tasks.columns:
             rt = filt_tasks[filt_tasks["hubspot_owner_name"] == rep]
@@ -245,8 +248,8 @@ if st.session_state.page == "Rep Activity":
                 u = rt["task_status"].astype(str).str.upper().str.strip()
                 comp = int(u.isin({"COMPLETED", "COMPLETE", "DONE"}).sum())
                 over = int(u.isin({"OVERDUE", "PAST_DUE", "DEFERRED"}).sum())
-        score = m*WEIGHTS["meetings"] + c*WEIGHTS["calls"] + comp*WEIGHTS["completed_tasks"] + over*WEIGHTS["overdue_tasks"]
-        lb_rows.append({"Rep": rep, "Meetings": m, "Calls": c, "Tasks": comp, "Overdue": over, "Score": score})
+        score = m*WEIGHTS["meetings"] + c*WEIGHTS["calls"] + e*WEIGHTS["emails"] + comp*WEIGHTS["completed_tasks"] + over*WEIGHTS["overdue_tasks"]
+        lb_rows.append({"Rep": rep, "Meetings": m, "Calls": c, "Emails": e, "Tasks": comp, "Overdue": over, "Score": score})
 
     leaderboard = pd.DataFrame(lb_rows).sort_values("Score", ascending=False).reset_index(drop=True)
     st.dataframe(leaderboard, use_container_width=True, hide_index=True)
@@ -258,10 +261,11 @@ if st.session_state.page == "Rep Activity":
         st.markdown('<div class="sec-header">By Rep</div>', unsafe_allow_html=True)
         if not leaderboard.empty:
             fig = px.bar(
-                leaderboard.melt(id_vars="Rep", value_vars=["Meetings", "Calls", "Tasks"],
+                leaderboard.melt(id_vars="Rep", value_vars=["Meetings", "Calls", "Emails", "Tasks"],
                                  var_name="Type", value_name="Count"),
                 x="Rep", y="Count", color="Type", barmode="group",
-                color_discrete_map={"Meetings": COLORS["meetings"], "Calls": COLORS["calls"], "Tasks": COLORS["tasks"]},
+                color_discrete_map={"Meetings": COLORS["meetings"], "Calls": COLORS["calls"],
+                                    "Emails": "#c084fc", "Tasks": COLORS["tasks"]},
             )
             fig.update_layout(xaxis_title="", yaxis_title="")
             _apply_plotly_theme(fig)
@@ -292,9 +296,9 @@ if st.session_state.page == "Rep Activity":
 
     for _, row in leaderboard.iterrows():
         rep = row["Rep"]
-        with st.expander(f"**{rep}** — {row['Meetings']} meetings · {row['Calls']} calls · {row['Tasks']} tasks · Score: {row['Score']}"):
+        with st.expander(f"**{rep}** — {row['Meetings']} meetings · {row['Calls']} calls · {row['Emails']} emails · {row['Tasks']} tasks · Score: {row['Score']}"):
 
-            dtab_m, dtab_c, dtab_t = st.tabs(["Meetings", "Calls", "Tasks"])
+            dtab_m, dtab_c, dtab_e, dtab_t = st.tabs(["Meetings", "Calls", "Emails", "Tasks"])
 
             with dtab_m:
                 rm = filt_meetings[filt_meetings["hubspot_owner_name"] == rep] if not filt_meetings.empty and "hubspot_owner_name" in filt_meetings.columns else pd.DataFrame()
@@ -315,6 +319,17 @@ if st.session_state.page == "Rep Activity":
                                  use_container_width=True, hide_index=True)
                 else:
                     st.caption("No calls this period.")
+
+            with dtab_e:
+                re = filt_emails[filt_emails["hubspot_owner_name"] == rep] if not filt_emails.empty and "hubspot_owner_name" in filt_emails.columns else pd.DataFrame()
+                if not re.empty:
+                    show = [c for c in ("activity_date", "email_subject", "company_name",
+                                        "email_direction", "email_send_status",
+                                        "email_from_address", "email_to_address") if c in re.columns]
+                    st.dataframe(_safe_sort(re[show].copy(), show[0]) if show else re,
+                                 use_container_width=True, hide_index=True)
+                else:
+                    st.caption("No emails this period.")
 
             with dtab_t:
                 rt = filt_tasks[filt_tasks["hubspot_owner_name"] == rep] if not filt_tasks.empty and "hubspot_owner_name" in filt_tasks.columns else pd.DataFrame()
@@ -341,13 +356,14 @@ elif st.session_state.page == "Deal Health Monitor":
     all_meetings = _frep(data.meetings)
     all_calls = _frep(data.calls)
     all_tasks = _frep(data.tasks)
+    all_emails = _frep(data.emails)
 
     if active_deals.empty:
         st.info("No active deals for selected filters.")
     else:
         # Activity summary by company
         act_frames = []
-        for df, atype, dcol in [(all_calls, "Call", "activity_date"), (all_meetings, "Meeting", "meeting_start_time"), (all_tasks, "Task", "completed_at")]:
+        for df, atype, dcol in [(all_calls, "Call", "activity_date"), (all_meetings, "Meeting", "meeting_start_time"), (all_tasks, "Task", "completed_at"), (all_emails, "Email", "activity_date")]:
             if df.empty or "company_name" not in df.columns: continue
             tmp = df[["company_name"]].copy()
             tmp["_dt"] = pd.to_datetime(df[dcol], errors="coerce") if dcol in df.columns else pd.NaT
@@ -366,15 +382,16 @@ elif st.session_state.page == "Deal Health Monitor":
                 act_30d=("_dt", lambda x: (x >= day30).sum()),
                 calls=("_type", lambda x: (x == "Call").sum()),
                 mtgs=("_type", lambda x: (x == "Meeting").sum()),
+                emails_ct=("_type", lambda x: (x == "Email").sum()),
                 tasks_ct=("_type", lambda x: (x == "Task").sum()),
             ).reset_index()
         else:
-            co_summary = pd.DataFrame(columns=["_co", "last_activity", "total", "act_7d", "act_30d", "calls", "mtgs", "tasks_ct"])
+            co_summary = pd.DataFrame(columns=["_co", "last_activity", "total", "act_7d", "act_30d", "calls", "mtgs", "emails_ct", "tasks_ct"])
 
         active_deals["_co"] = active_deals["company_name"].astype(str).str.strip().str.lower() if "company_name" in active_deals.columns else ""
         merged = active_deals.merge(co_summary, on="_co", how="left")
 
-        for c in ["total", "act_7d", "act_30d", "calls", "mtgs", "tasks_ct"]:
+        for c in ["total", "act_7d", "act_30d", "calls", "mtgs", "emails_ct", "tasks_ct"]:
             if c in merged.columns: merged[c] = merged[c].fillna(0).astype(int)
 
         merged["health"] = merged.get("last_activity", pd.Series(dtype="datetime64[ns]")).apply(
@@ -440,7 +457,7 @@ elif st.session_state.page == "Deal Health Monitor":
             with st.expander(f"**{rep}** — {n} deals · ${val:,.0f} · {n_ok} active · {n_bad} attention"):
                 show = [c for c in ("deal_name", "company_name", "deal_stage", "forecast_category",
                                     "amount", "close_date", "health", "days_since",
-                                    "calls", "mtgs", "tasks_ct", "act_30d") if c in rd.columns]
+                                    "calls", "mtgs", "emails_ct", "tasks_ct", "act_30d") if c in rd.columns]
                 display = _safe_sort(rd[show].copy(), "days_since")
 
                 if "deal_id" in rd.columns:
@@ -454,6 +471,6 @@ elif st.session_state.page == "Deal Health Monitor":
                         "HubSpot": st.column_config.LinkColumn("HS Link", display_text="Open"),
                         "amount": st.column_config.NumberColumn("Amount", format="$%,.0f"),
                         "days_since": st.column_config.NumberColumn("Days Idle"),
-                        "calls": "Calls", "mtgs": "Meetings", "tasks_ct": "Tasks",
+                        "calls": "Calls", "mtgs": "Meetings", "emails_ct": "Emails", "tasks_ct": "Tasks",
                         "act_30d": st.column_config.NumberColumn("30d Activity"),
                     })
