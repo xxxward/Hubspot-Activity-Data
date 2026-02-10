@@ -1,7 +1,7 @@
 """
 Streamlit dashboard for HubSpot Sales Analytics.
 
-Three tabs:
+Tabs:
   1. Rep Activity   - scores, counts, trends
   2. Pipeline       - active value, stage counts, win rate
   3. Terminal Deals - won/lost, NCR, sales orders, cycle length
@@ -11,10 +11,13 @@ Sidebar filters: date range, rep, pipeline.
 
 import streamlit as st
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 from datetime import date, timedelta
 
 from src.utils.logging import setup_logging
 from src.parsing.filters import REPS_IN_SCOPE, PIPELINES_IN_SCOPE
+from src.metrics.scoring import WEIGHTS
 from main import load_all, AnalyticsData
 
 setup_logging()
@@ -39,11 +42,11 @@ except Exception as e:
     st.stop()
 
 
-# -- Sidebar Filters ------------------------------------------------------
+# -- Sidebar Filters -------------------------------------------------------
 
 st.sidebar.title("Filters")
 
-_default_start = date.today() - timedelta(days=90)
+_default_start = date.today() - timedelta(days=7)
 date_range = st.sidebar.date_input("Date Range", value=(_default_start, date.today()), max_value=date.today())
 start_date, end_date = (date_range if isinstance(date_range, tuple) and len(date_range) == 2
                         else (_default_start, date.today()))
@@ -67,10 +70,67 @@ def _fpipe(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _fdate(df: pd.DataFrame, col: str = "period_day") -> pd.DataFrame:
+    """Filter a period-bucketed DataFrame by the sidebar date range."""
     if df.empty or col not in df.columns:
         return df
     dt = pd.to_datetime(df[col], errors="coerce").dt.date
     return df.loc[(dt >= start_date) & (dt <= end_date)].copy()
+
+
+def _fdate_raw(df: pd.DataFrame, date_col: str = "activity_date") -> pd.DataFrame:
+    """Filter a raw activity DataFrame by date range. Tries several date columns."""
+    if df.empty:
+        return df
+    for col in (date_col, "activity_date", "meeting_start_time", "created_date"):
+        if col in df.columns:
+            dt = pd.to_datetime(df[col], errors="coerce").dt.date
+            mask = (dt >= start_date) & (dt <= end_date)
+            return df.loc[mask].copy()
+    return df
+
+
+def _compute_leaderboard(meetings: pd.DataFrame, calls: pd.DataFrame,
+                         tasks: pd.DataFrame) -> pd.DataFrame:
+    """Compute activity leaderboard from date-filtered raw data."""
+    rows = []
+    for rep in selected_reps:
+        m_count = len(meetings[meetings["hubspot_owner_name"] == rep]) if not meetings.empty and "hubspot_owner_name" in meetings.columns else 0
+        c_count = len(calls[calls["hubspot_owner_name"] == rep]) if not calls.empty and "hubspot_owner_name" in calls.columns else 0
+
+        # Tasks: completed vs overdue
+        if not tasks.empty and "hubspot_owner_name" in tasks.columns:
+            rep_tasks = tasks[tasks["hubspot_owner_name"] == rep]
+            status_col = "task_status" if "task_status" in rep_tasks.columns else None
+            if status_col:
+                upper = rep_tasks[status_col].astype(str).str.upper().str.strip()
+                comp = int(upper.isin({"COMPLETED", "COMPLETE", "DONE"}).sum())
+                overdue = int(upper.isin({"OVERDUE", "PAST_DUE", "DEFERRED"}).sum())
+                # Also check past due_date
+                if "due_date" in rep_tasks.columns:
+                    past_due = pd.to_datetime(rep_tasks["due_date"], errors="coerce") < pd.Timestamp.now()
+                    not_done = ~upper.isin({"COMPLETED", "COMPLETE", "DONE"})
+                    overdue = max(overdue, int((past_due & not_done).sum()))
+            else:
+                comp = len(rep_tasks)
+                overdue = 0
+        else:
+            comp = 0
+            overdue = 0
+
+        score = (m_count * WEIGHTS["meetings"] + c_count * WEIGHTS["calls"] +
+                 comp * WEIGHTS["completed_tasks"] + overdue * WEIGHTS["overdue_tasks"])
+
+        rows.append({
+            "Rep": rep,
+            "Meetings": m_count,
+            "Calls": c_count,
+            "Completed Tasks": comp,
+            "Overdue Tasks": overdue,
+            "Activity Score": score,
+        })
+
+    df = pd.DataFrame(rows).sort_values("Activity Score", ascending=False).reset_index(drop=True)
+    return df
 
 
 # -- Tabs ------------------------------------------------------------------
@@ -81,48 +141,64 @@ tab_act, tab_pipe, tab_term = st.tabs(["Rep Activity", "Pipeline", "Terminal Dea
 
 with tab_act:
     st.header("Rep Activity Dashboard")
+    st.caption(f"Showing: {start_date.strftime('%b %d, %Y')} — {end_date.strftime('%b %d, %Y')}")
 
-    # Leaderboard
-    st.subheader("Activity Score Leaderboard")
-    scores = _frep(data.rep_activity_score)
-    if not scores.empty:
-        st.dataframe(scores, width="stretch", hide_index=True)
-    else:
-        st.info("No activity score data.")
+    # Date-filter raw activity data FIRST, then compute leaderboard
+    filt_meetings = _fdate_raw(_frep(data.meetings), "meeting_start_time")
+    filt_calls = _fdate_raw(_frep(data.calls), "activity_date")
+    filt_tasks = _fdate_raw(_frep(data.tasks), "completed_at")
+
+    # KPI cards
+    col1, col2, col3, col4 = st.columns(4)
+    total = len(filt_meetings) + len(filt_calls) + len(filt_tasks)
+    col1.metric("Total Activities", f"{total:,}")
+    col2.metric("Meetings", f"{len(filt_meetings):,}")
+    col3.metric("Calls", f"{len(filt_calls):,}")
+    col4.metric("Tasks", f"{len(filt_tasks):,}")
 
     st.divider()
 
-    # Granularity picker
-    grain = st.radio("Granularity", ["Daily", "Weekly", "Monthly"], index=1, horizontal=True)
-    _gmap = {
-        "Daily": ("activity_counts_daily", "period_day"),
-        "Weekly": ("activity_counts_weekly", "period_week"),
-        "Monthly": ("activity_counts_monthly", "period_month"),
-    }
-    counts_key, pcol = _gmap[grain]
-    counts = _fdate(_frep(getattr(data, counts_key, pd.DataFrame())), pcol)
-
-    if not counts.empty:
-        st.subheader(f"Activity Counts ({grain})")
-        st.dataframe(counts, width="stretch", hide_index=True)
-
-        st.subheader("Activity Trend")
-        mcols = [c for c in ("meetings", "calls", "emails", "completed_tasks", "overdue_tasks") if c in counts.columns]
-        if mcols and pcol in counts.columns:
-            chart = counts.groupby(pcol, dropna=False)[mcols].sum().reset_index().set_index(pcol)
-            st.bar_chart(chart)
+    # Leaderboard — computed from date-filtered data
+    st.subheader("Activity Leaderboard")
+    leaderboard = _compute_leaderboard(filt_meetings, filt_calls, filt_tasks)
+    if not leaderboard.empty:
+        st.dataframe(leaderboard, width="stretch", hide_index=True)
     else:
         st.info("No activity data for selected filters.")
 
     st.divider()
-    st.subheader("Activity Score Trend (Weekly)")
-    trend = _frep(data.rep_activity_score_trend)
-    if not trend.empty and "period_week" in trend.columns:
-        pivot = trend.pivot_table(index="period_week", columns="hubspot_owner_name",
-                                  values="activity_score", aggfunc="sum").fillna(0)
-        st.line_chart(pivot)
+
+    # By Rep bar chart
+    if not leaderboard.empty:
+        st.subheader("Activity by Rep")
+        fig = px.bar(
+            leaderboard,
+            x="Rep", y=["Meetings", "Calls", "Completed Tasks"],
+            barmode="group",
+            color_discrete_sequence=["#10b981", "#3b82f6", "#f59e0b"],
+        )
+        fig.update_layout(legend_title_text="", xaxis_title="", yaxis_title="Count")
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+
+    # Daily trend
+    st.subheader("Daily Activity Trend")
+    daily = _fdate(_frep(data.activity_counts_daily), "period_day")
+    if not daily.empty:
+        mcols = [c for c in ("meetings", "calls", "completed_tasks") if c in daily.columns]
+        if mcols and "period_day" in daily.columns:
+            trend = daily.groupby("period_day", dropna=False)[mcols].sum().reset_index()
+            trend["period_day"] = pd.to_datetime(trend["period_day"])
+            fig2 = px.line(
+                trend.melt(id_vars="period_day", value_vars=mcols, var_name="Type", value_name="Count"),
+                x="period_day", y="Count", color="Type",
+                color_discrete_map={"meetings": "#10b981", "calls": "#3b82f6", "completed_tasks": "#f59e0b"},
+            )
+            fig2.update_layout(xaxis_title="", yaxis_title="Count", legend_title_text="")
+            st.plotly_chart(fig2, use_container_width=True)
     else:
-        st.info("No trend data.")
+        st.info("No daily trend data.")
 
 
 # -- Tab 2: Pipeline -------------------------------------------------------
@@ -159,23 +235,29 @@ with tab_pipe:
         st.subheader("Deals by Stage")
         dbs = data.deal_count_by_stage
         if not dbs.empty:
-            st.dataframe(dbs, width="stretch", hide_index=True)
+            fig_stage = px.bar(dbs, x="deal_stage", y="count", color_discrete_sequence=["#6366f1"])
+            fig_stage.update_layout(xaxis_title="", yaxis_title="Deals")
+            st.plotly_chart(fig_stage, use_container_width=True)
 
     with col_w:
         st.subheader("Win Rate")
         wr = _frep(_fpipe(data.win_rate))
         if not wr.empty:
-            # Format win_rate as percentage in a new column to avoid .style
             wr_display = wr.copy()
             if "win_rate" in wr_display.columns:
-                wr_display["win_rate"] = (wr_display["win_rate"] * 100).round(1).astype(str) + "%"
-            st.dataframe(wr_display, width="stretch", hide_index=True)
+                wr_display["win_rate_pct"] = (wr_display["win_rate"] * 100).round(1)
+                fig_wr = px.bar(wr_display, x="hubspot_owner_name", y="win_rate_pct",
+                                color_discrete_sequence=["#10b981"])
+                fig_wr.update_layout(xaxis_title="", yaxis_title="Win Rate %")
+                st.plotly_chart(fig_wr, use_container_width=True)
 
     st.divider()
     st.subheader("Avg Days in Stage")
     adis = data.avg_days_in_stage
-    if not adis.empty:
-        st.bar_chart(adis.set_index("deal_stage")["avg_days"])
+    if not adis.empty and "deal_stage" in adis.columns and "avg_days" in adis.columns:
+        fig_days = px.bar(adis, x="deal_stage", y="avg_days", color_discrete_sequence=["#f59e0b"])
+        fig_days.update_layout(xaxis_title="", yaxis_title="Avg Days")
+        st.plotly_chart(fig_days, use_container_width=True)
 
 
 # -- Tab 3: Terminal Deals --------------------------------------------------
@@ -187,6 +269,17 @@ with tab_term:
     wvl = _frep(data.closed_won_vs_lost)
     if not wvl.empty:
         st.dataframe(wvl, width="stretch", hide_index=True)
+        if "hubspot_owner_name" in wvl.columns:
+            melt_cols = [c for c in ("closed_won", "closed_lost") if c in wvl.columns]
+            if melt_cols:
+                fig_wvl = px.bar(
+                    wvl.melt(id_vars="hubspot_owner_name", value_vars=melt_cols,
+                             var_name="Status", value_name="Count"),
+                    x="hubspot_owner_name", y="Count", color="Status", barmode="group",
+                    color_discrete_map={"closed_won": "#10b981", "closed_lost": "#ef4444"},
+                )
+                fig_wvl.update_layout(xaxis_title="", legend_title_text="")
+                st.plotly_chart(fig_wvl, use_container_width=True)
     else:
         st.info("No terminal deal data.")
 
