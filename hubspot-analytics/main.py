@@ -1,8 +1,5 @@
 """
-Main orchestrator: load -> normalize -> filter -> compute metrics.
-
-    from main import load_all   # used by Streamlit
-    python main.py              # CLI summary (requires streamlit secrets context)
+Main orchestrator: load -> normalize -> owner map -> dedup -> filter -> metrics.
 """
 
 import logging
@@ -12,7 +9,10 @@ import pandas as pd
 
 from src.utils.logging import setup_logging
 from src.sheets.sheets_client import read_all_tabs
-from src.parsing.normalize import normalize_dataframe
+from src.parsing.normalize import (
+    normalize_dataframe, build_uid_map_from_meetings,
+    apply_owner_mapping, deduplicate_meetings,
+)
 from src.parsing.filters import apply_deal_filters, apply_activity_filters
 from src.metrics.activity import count_activities, build_combined_activity_log
 from src.metrics.pipeline import pipeline_summary
@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 @dataclass
 class AnalyticsData:
     """Container for every computed DataFrame."""
-
     # Filtered base tables
     deals: pd.DataFrame = field(default_factory=pd.DataFrame)
     meetings: pd.DataFrame = field(default_factory=pd.DataFrame)
@@ -60,28 +59,46 @@ class AnalyticsData:
 def load_all() -> AnalyticsData:
     """
     Full pipeline:
-      1. Read tabs from Google Sheets (via st.secrets)
+      1. Read tabs from Google Sheets
       2. Normalize columns & types
-      3. Apply rep / pipeline / stage filters
-      4. Compute all metrics
+      3. Build UID->Name map from Meetings
+      4. Apply owner mapping per tab
+      5. Deduplicate meetings
+      6. Filter by rep/pipeline/stage
+      7. Compute all metrics
     """
     # 1 - Read
     logger.info("Reading Google Sheets...")
     raw = read_all_tabs()
 
-    # 2 - Normalize
+    # 2 - Normalize columns & types
     logger.info("Normalizing...")
     norm = {k: normalize_dataframe(v) for k, v in raw.items()}
 
-    # 3 - Filter
+    # 3 - Build UID map from meetings (the Rosetta Stone)
+    logger.info("Building HubSpot UID -> Name mapping...")
+    uid_map = build_uid_map_from_meetings(norm.get("meetings", pd.DataFrame()))
+
+    # 4 - Apply owner mapping per tab type
+    logger.info("Applying owner mappings...")
+    for tab_type in ("deals", "meetings", "calls", "tasks", "tickets"):
+        if tab_type in norm and not norm[tab_type].empty:
+            norm[tab_type] = apply_owner_mapping(norm[tab_type], uid_map, tab_type)
+
+    # 5 - Deduplicate meetings
+    logger.info("Deduplicating meetings...")
+    if not norm.get("meetings", pd.DataFrame()).empty:
+        norm["meetings"] = deduplicate_meetings(norm["meetings"])
+
+    # 6 - Filter
     logger.info("Filtering...")
     deals = apply_deal_filters(norm.get("deals", pd.DataFrame()))
     meetings = apply_activity_filters(norm.get("meetings", pd.DataFrame()))
     tasks = apply_activity_filters(norm.get("tasks", pd.DataFrame()))
     calls = apply_activity_filters(norm.get("calls", pd.DataFrame()))
-    tickets = norm.get("tickets", pd.DataFrame())  # no rep filter needed
+    tickets = norm.get("tickets", pd.DataFrame())
 
-    # 4 - Metrics
+    # 7 - Metrics
     logger.info("Computing activity metrics...")
     activity = count_activities(calls, meetings, tasks)
     activity_log = build_combined_activity_log(calls, meetings, tasks)
@@ -97,11 +114,7 @@ def load_all() -> AnalyticsData:
     term = terminal_summary(deals)
 
     data = AnalyticsData(
-        deals=deals,
-        meetings=meetings,
-        tasks=tasks,
-        tickets=tickets,
-        calls=calls,
+        deals=deals, meetings=meetings, tasks=tasks, tickets=tickets, calls=calls,
         activity_counts_daily=activity.get("activity_counts_daily", pd.DataFrame()),
         activity_counts_weekly=weekly,
         activity_counts_monthly=activity.get("activity_counts_monthly", pd.DataFrame()),
