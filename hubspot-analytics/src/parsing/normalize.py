@@ -61,6 +61,13 @@ COLUMN_ALIASES: dict[str, str] = {
     "email_cc_address": "email_cc_address",
     "first_name_activity_assigned_to": "owner_first_name",
     "last_name_activity_assigned_to": "owner_last_name",
+    "created_by_user_id": "created_by_user_id",
+    "hub_spot_team": "hubspot_team",
+    "updated_by_user_id": "updated_by_user_id",
+    # Notes
+    "note_id": "note_id",
+    "note_body": "note_body",
+    "deal_name": "deal_name",
     # Tickets
     "first_name_ticket_owner": "ticket_owner_first_name",
 }
@@ -186,6 +193,13 @@ def apply_owner_mapping(df: pd.DataFrame, uid_map: dict[str, str], tab_type: str
         else:
             logger.warning("Emails: no owner columns found. Available: %s", list(df.columns))
         logger.info("Emails owner mapping: %d rows after filtering to reps.", len(df))
+
+    elif tab_type == "notes":
+        # Notes have activity_assigned_to (UID) — map via uid_map
+        if "activity_assigned_to" in df.columns:
+            df["hubspot_owner_name"] = df["activity_assigned_to"].apply(lambda x: uid_map.get(_clean_uid(x), ""))
+            df = df[df["hubspot_owner_name"] != ""].copy()
+        logger.info("Notes owner mapping: %d rows after filtering to reps.", len(df))
 
     elif tab_type == "tickets":
         first = df.get("first_name", pd.Series("", index=df.index)).fillna("").astype(str).str.strip()
