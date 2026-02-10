@@ -26,10 +26,19 @@ st.markdown("""
     .stApp { background-color: #1a1d23; font-family: 'DM Sans', sans-serif; }
 
     /* Sidebar */
-    section[data-testid="stSidebar"] {
-        background-color: #1e2128;
-        border-right: 1px solid #2d323b;
+    section[data-testid="stSidebar"] { background-color: #1e2128; border-right: 1px solid #2d323b; }
+    section[data-testid="stSidebar"] h3,
+    section[data-testid="stSidebar"] p,
+    section[data-testid="stSidebar"] span,
+    section[data-testid="stSidebar"] label,
+    section[data-testid="stSidebar"] .stMarkdown {
+        color: #d0d7de !important;
     }
+    section[data-testid="stSidebar"] .stCaption p { color: #8a919e !important; }
+
+    /* Global text */
+    .stApp, .stApp p, .stApp span, .stApp label, .stApp li,
+    .stMarkdown, .stMarkdown p, .stMarkdown span { color: #d0d7de; }
 
     /* KPI cards */
     .kpi-row { display: flex; gap: 12px; margin: 16px 0; }
@@ -40,20 +49,8 @@ st.markdown("""
         border-radius: 10px;
         padding: 18px 20px;
     }
-    .kpi-label {
-        color: #8a919e;
-        font-size: 0.72rem;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        margin-bottom: 6px;
-        font-weight: 500;
-    }
-    .kpi-value {
-        font-size: 1.85rem;
-        font-weight: 700;
-        line-height: 1.2;
-        color: #e1e4e8;
-    }
+    .kpi-label { color: #8a919e; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; font-weight: 500; }
+    .kpi-value { font-size: 1.85rem; font-weight: 700; line-height: 1.2; color: #e6edf3; }
     .kpi-green { color: #4ade80; }
     .kpi-blue { color: #60a5fa; }
     .kpi-amber { color: #fbbf24; }
@@ -61,7 +58,7 @@ st.markdown("""
 
     /* Section header */
     .sec-header {
-        color: #e1e4e8;
+        color: #e6edf3;
         font-size: 1.05rem;
         font-weight: 600;
         padding: 10px 0 8px;
@@ -69,16 +66,7 @@ st.markdown("""
         border-bottom: 1px solid #2d323b;
     }
 
-    /* Filter bar */
-    .filter-bar {
-        background: #22262e;
-        border: 1px solid #2d323b;
-        border-radius: 10px;
-        padding: 14px 20px;
-        margin-bottom: 16px;
-    }
-
-    /* Streamlit widget overrides for readability */
+    /* Filter labels */
     .stMultiSelect label, .stDateInput label, .stSelectbox label {
         color: #8a919e !important;
         font-size: 0.78rem !important;
@@ -86,10 +74,25 @@ st.markdown("""
         letter-spacing: 0.8px !important;
     }
 
-    .block-container { padding-top: 1rem; }
+    /* Expanders */
     .stExpander { border: 1px solid #2d323b; border-radius: 10px; }
+    .stExpander summary,
+    .stExpander summary span,
+    .stExpander summary p,
+    .stExpander [data-testid="stExpanderDetails"] p,
+    details summary span { color: #d0d7de !important; }
+
+    /* Tabs */
     .stTabs [data-baseweb="tab"] { color: #8a919e; }
     .stTabs [aria-selected="true"] { color: #60a5fa; }
+
+    /* Tables */
+    .stDataFrame { border-radius: 8px; overflow: hidden; }
+
+    /* Dividers */
+    hr { border-color: #2d323b; }
+
+    .block-container { padding-top: 1rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -151,7 +154,7 @@ st.sidebar.caption(
 
 # ── Top Filter Bar ──────────────────────────────────────────────────────
 with st.container():
-    f1, f2, f3 = st.columns([2, 4, 4])
+    f1, f2 = st.columns([1, 3])
     with f1:
         _ds = date.today() - timedelta(days=7)
         date_range = st.date_input("DATE RANGE", value=(_ds, date.today()), max_value=date.today())
@@ -159,8 +162,8 @@ with st.container():
                                 else (_ds, date.today()))
     with f2:
         selected_reps = st.multiselect("REPS", REPS_IN_SCOPE, default=REPS_IN_SCOPE)
-    with f3:
-        selected_pipelines = st.multiselect("PIPELINES", PIPELINES_IN_SCOPE, default=PIPELINES_IN_SCOPE)
+
+    selected_pipelines = st.multiselect("PIPELINES", PIPELINES_IN_SCOPE, default=PIPELINES_IN_SCOPE)
 
 st.markdown("---")
 
