@@ -167,18 +167,24 @@ def apply_owner_mapping(df: pd.DataFrame, uid_map: dict[str, str], tab_type: str
         # Build name from first + last name columns, or map UID
         REP_LAST_NAMES = {"Sherman", "Labombard", "Lynch", "Borkowski", "Gonzalez", "Mitton"}
 
-        # Try owner_first_name + owner_last_name first (from "First name (Activity assigned to)" etc)
-        first_col = "owner_first_name" if "owner_first_name" in df.columns else "first_name"
-        last_col = "owner_last_name" if "owner_last_name" in df.columns else "last_name"
+        logger.info("Emails columns before owner mapping: %s", list(df.columns))
 
-        if first_col in df.columns and last_col in df.columns:
+        # Try owner_first_name + owner_last_name first (from "First name (Activity assigned to)" etc)
+        first_col = "owner_first_name" if "owner_first_name" in df.columns else ("first_name" if "first_name" in df.columns else None)
+        last_col = "owner_last_name" if "owner_last_name" in df.columns else ("last_name" if "last_name" in df.columns else None)
+
+        if first_col and last_col:
             first = df[first_col].fillna("").astype(str).str.strip()
             last = df[last_col].fillna("").astype(str).str.strip()
             df["hubspot_owner_name"] = (first + " " + last).str.strip()
             # Filter to only our reps by last name
+            logger.info("Emails: unique last names: %s", df[last_col].unique()[:20].tolist())
             df = df[df[last_col].astype(str).str.strip().isin(REP_LAST_NAMES)].copy()
         elif "activity_assigned_to" in df.columns:
             df["hubspot_owner_name"] = df["activity_assigned_to"].apply(lambda x: uid_map.get(_clean_uid(x), ""))
+            df = df[df["hubspot_owner_name"] != ""].copy()
+        else:
+            logger.warning("Emails: no owner columns found. Available: %s", list(df.columns))
         logger.info("Emails owner mapping: %d rows after filtering to reps.", len(df))
 
     elif tab_type == "tickets":
