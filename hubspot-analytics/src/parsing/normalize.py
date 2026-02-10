@@ -326,6 +326,12 @@ def deduplicate_meetings(df: pd.DataFrame) -> pd.DataFrame:
         merged_rows.append(merged)
 
     result = pd.DataFrame(merged_rows)
+
+    # Fix mixed types from merge — re-parse datetime columns
+    for col in result.columns:
+        if col in DATE_COLUMNS or col.endswith("_date") or col.endswith("_time") or col.endswith("_at"):
+            result[col] = pd.to_datetime(result[col], errors="coerce")
+
     logger.info("Meeting dedup: %d -> %d rows (removed %d duplicates).",
                 len(df), len(result), len(df) - len(result))
     return result
