@@ -14,7 +14,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# ── snake_case helper ───────────────────────────────────────────────
+# -- snake_case helper ---------------------------------------------------
 
 def to_snake_case(name: str) -> str:
     s = re.sub(r"[\s\-\.\/\(\)]+", "_", str(name).strip())
@@ -23,15 +23,12 @@ def to_snake_case(name: str) -> str:
     return s
 
 
-# ── Column alias map ────────────────────────────────────────────────
+# -- Column alias map ----------------------------------------------------
 # Keys   = snake_case of the raw Coefficient header
 # Values = canonical internal name
-#
-# Only columns that need renaming are listed.  Columns whose snake_case
-# form already matches the canonical name (e.g. "amount") are omitted.
 
 COLUMN_ALIASES: dict[str, str] = {
-    # ── Deals tab ──
+    # -- Deals tab --
     "deal_id": "deal_id",
     "deal_name": "deal_name",
     "first_name": "first_name",
@@ -39,6 +36,7 @@ COLUMN_ALIASES: dict[str, str] = {
     "create_date": "created_date",
     "close_date": "close_date",
     "deal_stage": "deal_stage",
+    "is_deal_closed?": "is_deal_closed",
     "is_deal_closed": "is_deal_closed",
     "is_closed_won": "is_closed_won",
     "forecast_category": "forecast_category",
@@ -59,11 +57,12 @@ COLUMN_ALIASES: dict[str, str] = {
     "opp_owner": "hubspot_owner_name",
     "sales_team": "sales_team",
     "opp_type_no_blanks": "opp_type",
+    "opp_type": "opp_type",
     "hubspot_opp_url": "hubspot_opp_url",
     "opp_name_hyperlinked": "opp_name_hyperlinked",
     "pipeline": "pipeline",
 
-    # ── Meetings tab ──
+    # -- Meetings tab --
     "activity_date": "activity_date",
     "body_preview_truncated": "body_preview",
     "meeting_start_time": "meeting_start_time",
@@ -79,9 +78,8 @@ COLUMN_ALIASES: dict[str, str] = {
     "activity_assigned_to": "hubspot_owner_name",
     "activity_created_by": "activity_created_by",
     "follow_up_action": "follow_up_action",
-    "create_date": "created_date",
 
-    # ── Tasks tab ──
+    # -- Tasks tab --
     "for_object_type": "for_object_type",
     "completed_at": "completed_at",
     "task_title": "task_title",
@@ -95,7 +93,7 @@ COLUMN_ALIASES: dict[str, str] = {
     "full_name": "full_name",
     "last_modified_at": "last_modified_date",
 
-    # ── Calls tab ──
+    # -- Calls tab --
     "call_id": "call_id",
     "call_outcome": "call_outcome",
     "call_duration": "call_duration",
@@ -107,7 +105,7 @@ COLUMN_ALIASES: dict[str, str] = {
     "call_summary": "call_summary",
     "company_owner": "company_owner",
 
-    # ── Tickets tab ──
+    # -- Tickets tab --
     "ticket_id": "ticket_id",
     "ticket_name": "ticket_name",
     "ticket_status": "ticket_status",
@@ -117,7 +115,7 @@ COLUMN_ALIASES: dict[str, str] = {
 }
 
 
-# ── Date & numeric detection ───────────────────────────────────────
+# -- Date & numeric detection --------------------------------------------
 
 DATE_COLUMNS = {
     "created_date", "close_date", "activity_date", "meeting_start_time",
@@ -131,17 +129,38 @@ NUMERIC_COLUMNS = {
 }
 
 
-# ── Public API ──────────────────────────────────────────────────────
+# -- Public API -----------------------------------------------------------
+
+def _deduplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Handle duplicate column names (e.g. Meetings tab has 'Last Activity Date' x2).
+
+    Appends _2, _3 etc. to duplicates so every column name is unique.
+    """
+    cols = list(df.columns)
+    seen: dict[str, int] = {}
+    new_cols = []
+    for c in cols:
+        if c in seen:
+            seen[c] += 1
+            new_cols.append(f"{c}_{seen[c]}")
+        else:
+            seen[c] = 1
+            new_cols.append(c)
+    df.columns = new_cols
+    return df
+
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Rename all columns to snake_case, then apply alias mapping."""
+    """Rename all columns to snake_case, deduplicate, then apply alias mapping."""
     if df.empty:
         return df
     df = df.copy()
     df.columns = [to_snake_case(c) for c in df.columns]
+    df = _deduplicate_columns(df)
     df = df.rename(columns=COLUMN_ALIASES)
     # Drop unnamed/blank columns
-    df = df.loc[:, [not str(c).startswith("unnamed") and str(c).strip() != "" for c in df.columns]]
+    df = df.loc[:, [bool(str(c).strip()) and not str(c).startswith("unnamed") for c in df.columns]]
     return df
 
 
@@ -166,26 +185,39 @@ def coerce_numerics(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def strip_whitespace(df: pd.DataFrame) -> pd.DataFrame:
+    """Strip whitespace from string columns and convert blanks to NaN."""
     if df.empty:
         return df
     df = df.copy()
-    for col in df.select_dtypes(include=["object"]).columns:
-        df[col] = df[col].astype(str).str.strip()
-        df[col] = df[col].replace({"nan": np.nan, "": np.nan, "None": np.nan, "none": np.nan})
+    for col in df.columns:
+        # Only process columns that are object (string) dtype
+        if df[col].dtype != object:
+            continue
+        # Defensive: ensure we have a Series not a DataFrame (from dupes)
+        series = df[col]
+        if isinstance(series, pd.DataFrame):
+            series = series.iloc[:, 0]
+        series = series.astype(str).str.strip()
+        series = series.replace({"nan": np.nan, "": np.nan, "None": np.nan, "none": np.nan})
+        df[col] = series
     return df
 
 
 def safe_column(df: pd.DataFrame, col: str, default=np.nan) -> pd.Series:
     """Return a column if present, else a constant Series."""
     if col in df.columns:
-        return df[col]
+        result = df[col]
+        # Guard against duplicate columns returning a DataFrame
+        if isinstance(result, pd.DataFrame):
+            result = result.iloc[:, 0]
+        return result
     return pd.Series(default, index=df.index, name=col)
 
 
 def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
     Full normalization pipeline:
-      1. snake_case + alias mapping
+      1. snake_case + deduplicate + alias mapping
       2. strip whitespace
       3. coerce dates
       4. coerce numerics
@@ -196,6 +228,6 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df = strip_whitespace(df)
     df = coerce_dates(df)
     df = coerce_numerics(df)
-    logger.info("Normalized: %d rows × %d cols.  Columns: %s",
+    logger.info("Normalized: %d rows x %d cols.  Columns: %s",
                 len(df), len(df.columns), list(df.columns))
     return df
