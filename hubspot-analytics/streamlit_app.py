@@ -208,7 +208,8 @@ with st.sidebar:
     st.markdown("---")
     st.caption(
         f"{len(data.deals)} deals · {len(data.calls)} calls\n"
-        f"{len(data.meetings)} mtgs · {len(data.emails)} emails · {len(data.tasks)} tasks"
+        f"{len(data.meetings)} mtgs · {len(data.emails)} emails\n"
+        f"{len(data.tasks)} tasks · {len(data.notes)} notes"
     )
 
 
@@ -398,14 +399,14 @@ elif st.session_state.page == "deals":
 
     deals_f = _frep(_fpipe(data.deals))
     active = deals_f[~deals_f["is_terminal"]].copy() if "is_terminal" in deals_f.columns else deals_f.copy()
-    am, ac, at, ae = _frep(data.meetings), _frep(data.calls), _frep(data.tasks), _frep(data.emails)
+    am, ac, at, ae, an = _frep(data.meetings), _frep(data.calls), _frep(data.tasks), _frep(data.emails), _frep(data.notes)
 
     if active.empty:
         st.info("No active deals.")
     else:
         # Activity by company
         frames = []
-        for df, typ, dc in [(ac, "Call", "activity_date"), (am, "Meeting", "meeting_start_time"), (at, "Task", "completed_at"), (ae, "Email", "activity_date")]:
+        for df, typ, dc in [(ac, "Call", "activity_date"), (am, "Meeting", "meeting_start_time"), (at, "Task", "completed_at"), (ae, "Email", "activity_date"), (an, "Note", "activity_date")]:
             if df.empty or "company_name" not in df.columns: continue
             t = df[["company_name"]].copy()
             t["_dt"] = pd.to_datetime(df[dc], errors="coerce") if dc in df.columns else pd.NaT
@@ -425,6 +426,7 @@ elif st.session_state.page == "deals":
                 mtgs=("_tp", lambda x: (x == "Meeting").sum()),
                 emails=("_tp", lambda x: (x == "Email").sum()),
                 tasks=("_tp", lambda x: (x == "Task").sum()),
+                notes=("_tp", lambda x: (x == "Note").sum()),
             ).reset_index()
         else:
             cs = pd.DataFrame(columns=["_co"])
@@ -432,7 +434,7 @@ elif st.session_state.page == "deals":
         active["_co"] = active["company_name"].astype(str).str.strip().str.lower() if "company_name" in active.columns else ""
         mg = active.merge(cs, on="_co", how="left")
 
-        for col in ["total", "a7", "a30", "calls", "mtgs", "emails", "tasks"]:
+        for col in ["total", "a7", "a30", "calls", "mtgs", "emails", "tasks", "notes"]:
             if col in mg.columns: mg[col] = mg[col].fillna(0).astype(int)
 
         mg["health"] = mg.get("last_act", pd.Series(dtype="datetime64[ns]")).apply(
@@ -489,7 +491,7 @@ elif st.session_state.page == "deals":
             with st.expander(f"**{rep}**  ·  {n} deals  ·  ${v:,.0f}  ·  {nok} active  ·  {n - nok} attention"):
                 sc = [c for c in ("deal_name", "company_name", "deal_stage", "forecast_category",
                                   "amount", "close_date", "health", "days_idle",
-                                  "calls", "mtgs", "emails", "tasks", "a30") if c in rd.columns]
+                                  "calls", "mtgs", "emails", "notes", "tasks", "a30") if c in rd.columns]
                 disp = _safe_sort(rd[sc].copy(), "days_idle")
                 if "deal_id" in rd.columns:
                     disp = disp.copy()
@@ -499,6 +501,18 @@ elif st.session_state.page == "deals":
                         "HS": st.column_config.LinkColumn("Link", display_text="Open"),
                         "amount": st.column_config.NumberColumn("Amount", format="$%,.0f"),
                         "days_idle": st.column_config.NumberColumn("Days Idle"),
-                        "calls": "Calls", "mtgs": "Mtgs", "emails": "Emails", "tasks": "Tasks",
+                        "calls": "Calls", "mtgs": "Mtgs", "emails": "Emails",
+                        "notes": "Notes", "tasks": "Tasks",
                         "a30": st.column_config.NumberColumn("30d"),
                     })
+
+                # Show recent notes for this rep's deals
+                rep_notes = an[an["hubspot_owner_name"] == rep] if not an.empty and "hubspot_owner_name" in an.columns else pd.DataFrame()
+                if not rep_notes.empty and "deal_name" in rep_notes.columns:
+                    deal_names = set(rd["deal_name"].dropna().astype(str)) if "deal_name" in rd.columns else set()
+                    matched = rep_notes[rep_notes["deal_name"].astype(str).isin(deal_names)]
+                    if not matched.empty:
+                        st.markdown("**📝 Recent Notes**")
+                        note_cols = [c for c in ("activity_date", "deal_name", "company_name", "note_body") if c in matched.columns]
+                        st.dataframe(_display_df(_safe_sort(matched[note_cols].copy(), note_cols[0])),
+                                     use_container_width=True, hide_index=True)
