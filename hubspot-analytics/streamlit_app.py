@@ -655,7 +655,7 @@ elif st.session_state.page == "deals":
                     })
 
                 # Per-deal activity timeline + AI analysis
-                for _, deal_row in rd.iterrows():
+                for didx, (_, deal_row) in enumerate(rd.iterrows()):
                     dn_key = str(deal_row.get("deal_name", "")).strip().lower()
                     cached = deal_activity_cache.get(dn_key)
                     if cached is not None and not cached.empty:
@@ -668,7 +668,7 @@ elif st.session_state.page == "deals":
                             st.dataframe(timeline, use_container_width=True, hide_index=True)
 
                             # AI Analysis button
-                            btn_key = f"ai_{rep}_{dn_key}"
+                            btn_key = f"ai_{rep}_{didx}_{dn_key[:30]}"
                             if st.button("🤖 Analyze Deal Health", key=btn_key):
                                 with st.spinner("Analyzing..."):
                                     # Build context for Claude
