@@ -265,7 +265,7 @@ if st.session_state.page == "Rep Activity":
                 x="Rep", y="Count", color="Type", barmode="group",
                 color_discrete_map={"Meetings": COLORS["meetings"], "Calls": COLORS["calls"], "Completed Tasks": COLORS["tasks"]},
             )
-            fig.update_layout(**PLOTLY_LAYOUT, showlegend=True, legend=dict(orientation="h", y=-0.15))
+            fig.update_layout(**{**PLOTLY_LAYOUT, "legend": dict(bgcolor="rgba(0,0,0,0)", orientation="h", y=-0.15)}, showlegend=True)
             fig.update_layout(xaxis_title="", yaxis_title="")
             st.plotly_chart(fig, use_container_width=True)
 
@@ -283,7 +283,7 @@ if st.session_state.page == "Rep Activity":
                     color_discrete_map={"meetings": COLORS["meetings"], "calls": COLORS["calls"], "completed_tasks": COLORS["tasks"]},
                 )
                 fig2.update_traces(line_width=2.5)
-                fig2.update_layout(**PLOTLY_LAYOUT, showlegend=True, legend=dict(orientation="h", y=-0.15))
+                fig2.update_layout(**{**PLOTLY_LAYOUT, "legend": dict(bgcolor="rgba(0,0,0,0)", orientation="h", y=-0.15)}, showlegend=True)
                 fig2.update_layout(xaxis_title="", yaxis_title="")
                 st.plotly_chart(fig2, use_container_width=True)
         else:
