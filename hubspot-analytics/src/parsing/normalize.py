@@ -353,15 +353,14 @@ def deduplicate_meetings(df: pd.DataFrame) -> pd.DataFrame:
 
 def deduplicate_emails(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Remove duplicate emails caused by Gong + HubSpot both logging the same email.
+    Remove duplicate emails and collapse threads.
     
-    Pattern: "[Gong Out] Re: Subject" and "Re: Subject" on the same date, same company.
-    Also handles "[Gong In]" prefix and exact duplicate subjects on the same date.
-    
-    Strategy:
-      1. Normalize subject by stripping [Gong Out], [Gong In] prefixes
-      2. Group by (normalized_subject, date, company_name)
-      3. Keep one record per group, preferring non-Gong (HubSpot native) records
+    Two-phase dedup:
+      Phase 1: Remove Gong duplicates ([Gong Out]/[Gong In] copies of same email)
+      Phase 2: Collapse email threads into single activity records.
+               "Re: Re: Re: Subject" and "Re: Subject" on the same company = 1 thread.
+               Keep the MOST RECENT email in the thread as the representative record.
+               Store thread depth and all subjects for AI analysis.
     """
     if df.empty:
         return df
@@ -374,51 +373,101 @@ def deduplicate_emails(df: pd.DataFrame) -> pd.DataFrame:
         logger.warning("No email_subject column — skipping email dedup.")
         return df
 
-    # Parse date for grouping
     date_col = "activity_date" if "activity_date" in df.columns else "create_date"
     if date_col not in df.columns:
         logger.warning("No date column for email dedup.")
         return df
 
-    df["_email_date"] = pd.to_datetime(df[date_col], errors="coerce").dt.date
-
-    # Normalize subject: strip Gong prefixes
+    # ── Phase 1: Remove Gong duplicates ──
     raw_subject = df[subject_col].fillna("").astype(str)
     df["_is_gong"] = raw_subject.str.contains(r'^\[Gong (Out|In)\]', regex=True)
-    df["_norm_subject"] = raw_subject.str.replace(r'^\[Gong (Out|In)\]\s*', '', regex=True).str.strip().str.lower()
+    df["_clean_subject"] = raw_subject.str.replace(r'^\[Gong (Out|In)\]\s*', '', regex=True).str.strip()
 
-    # Company for grouping
+    df["_email_date"] = pd.to_datetime(df[date_col], errors="coerce").dt.date
     co_col = "company_name" if "company_name" in df.columns else None
     df["_co"] = df[co_col].fillna("").astype(str).str.strip().str.lower() if co_col else ""
-
-    # Also use from/to for tighter matching
     from_col = "email_from_address" if "email_from_address" in df.columns else None
     df["_from"] = df[from_col].fillna("").astype(str).str.strip().str.lower() if from_col else ""
 
-    # Group by normalized subject + date + company + from address
-    group_cols = ["_norm_subject", "_email_date", "_co", "_from"]
-    # Remove groups where subject is empty
-    has_subject = df["_norm_subject"] != ""
-
-    # For rows with subjects, deduplicate
+    has_subject = df["_clean_subject"].str.strip() != ""
     with_subject = df[has_subject].copy()
     without_subject = df[~has_subject].copy()
 
     if not with_subject.empty:
-        # Sort: non-Gong first so we keep HubSpot native records
         with_subject = with_subject.sort_values("_is_gong", ascending=True)
-        # Drop duplicates keeping first (non-Gong preferred)
-        deduped = with_subject.drop_duplicates(subset=group_cols, keep="first")
-    else:
-        deduped = with_subject
+        gong_group = ["_clean_subject", "_email_date", "_co", "_from"]
+        with_subject = with_subject.drop_duplicates(subset=[c for c in gong_group if c in with_subject.columns], keep="first")
 
-    result = pd.concat([deduped, without_subject], ignore_index=True)
+    df = pd.concat([with_subject, without_subject], ignore_index=True)
+    after_gong = len(df)
+
+    # ── Phase 2: Collapse email threads ──
+    # Strip Re:/Fwd:/FW: prefixes to get root subject (the original thread topic)
+    df["_thread_subject"] = (
+        df["_clean_subject"]
+        .str.replace(r'^(Re:\s*|Fwd:\s*|FW:\s*|Fw:\s*)+', '', regex=True)
+        .str.strip()
+        .str.lower()
+    )
+
+    # Group by thread subject + company (threads span multiple days)
+    df["_dt"] = pd.to_datetime(df[date_col], errors="coerce")
+
+    # Only collapse threads where we have a thread subject
+    has_thread = df["_thread_subject"] != ""
+    threadable = df[has_thread].copy()
+    non_threadable = df[~has_thread].copy()
+
+    if not threadable.empty:
+        thread_group = ["_thread_subject", "_co"]
+        # Sort by date desc so first record is the most recent
+        threadable = threadable.sort_values("_dt", ascending=False)
+
+        # For each thread group, keep the most recent email and annotate with thread info
+        thread_records = []
+        for key, group in threadable.groupby([c for c in thread_group if c in threadable.columns]):
+            # Keep the most recent email as the representative
+            rep_row = group.iloc[0].to_dict()
+            thread_depth = len(group)
+            rep_row["thread_depth"] = thread_depth
+
+            # Build thread summary for AI analysis (all subjects + dates)
+            if thread_depth > 1:
+                thread_parts = []
+                for _, msg in group.iterrows():
+                    dt_str = msg["_dt"].strftime("%m/%d") if pd.notna(msg["_dt"]) else "?"
+                    direction = msg.get("email_direction", "")
+                    subj = msg.get("_clean_subject", "")[:80]
+                    thread_parts.append(f"{dt_str} [{direction}] {subj}")
+                rep_row["thread_summary"] = " | ".join(thread_parts)
+            else:
+                rep_row["thread_summary"] = ""
+
+            thread_records.append(rep_row)
+
+        collapsed = pd.DataFrame(thread_records)
+    else:
+        collapsed = threadable
+        if "thread_depth" not in collapsed.columns:
+            collapsed["thread_depth"] = 1
+            collapsed["thread_summary"] = ""
+
+    result = pd.concat([collapsed, non_threadable], ignore_index=True)
+
+    # Add thread_depth to non-threadable
+    if "thread_depth" not in result.columns:
+        result["thread_depth"] = 1
+    if "thread_summary" not in result.columns:
+        result["thread_summary"] = ""
+    result["thread_depth"] = result["thread_depth"].fillna(1).astype(int)
 
     # Clean up temp columns
-    result = result.drop(columns=["_email_date", "_is_gong", "_norm_subject", "_co", "_from"], errors="ignore")
+    drop_cols = ["_is_gong", "_clean_subject", "_email_date", "_co", "_from",
+                 "_thread_subject", "_dt"]
+    result = result.drop(columns=[c for c in drop_cols if c in result.columns], errors="ignore")
 
-    logger.info("Email dedup: %d -> %d rows (removed %d duplicates).",
-                pre, len(result), pre - len(result))
+    logger.info("Email dedup: %d -> %d after Gong dedup -> %d after thread collapse (removed %d total).",
+                pre, after_gong, len(result), pre - len(result))
     return result
 
 
