@@ -54,6 +54,9 @@ start_date, end_date = (date_range if isinstance(date_range, tuple) and len(date
 selected_reps = st.sidebar.multiselect("Sales Reps", REPS_IN_SCOPE, default=REPS_IN_SCOPE)
 selected_pipelines = st.sidebar.multiselect("Pipelines", PIPELINES_IN_SCOPE, default=PIPELINES_IN_SCOPE)
 
+# Debug toggle
+show_debug = st.sidebar.checkbox("Show Debug Info", value=False)
+
 
 # -- Filter helpers --------------------------------------------------------
 
@@ -201,7 +204,11 @@ with tab_act:
         st.info("No daily trend data.")
 
     # DEBUG section
-    if show_debug:
+    try:
+        _show_debug = show_debug
+    except NameError:
+        _show_debug = False
+    if _show_debug:
         st.divider()
         st.subheader("DEBUG: Data Diagnostics")
 
