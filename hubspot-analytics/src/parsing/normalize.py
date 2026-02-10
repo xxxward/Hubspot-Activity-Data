@@ -140,8 +140,8 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [to_snake_case(c) for c in df.columns]
     df = df.rename(columns=COLUMN_ALIASES)
-    # Drop unnamed columns
-    df = df.loc[:, ~df.columns.str.match(r"^unnamed")]
+    # Drop unnamed/blank columns
+    df = df.loc[:, [not str(c).startswith("unnamed") and str(c).strip() != "" for c in df.columns]]
     return df
 
 
