@@ -351,6 +351,77 @@ def deduplicate_meetings(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def deduplicate_emails(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove duplicate emails caused by Gong + HubSpot both logging the same email.
+    
+    Pattern: "[Gong Out] Re: Subject" and "Re: Subject" on the same date, same company.
+    Also handles "[Gong In]" prefix and exact duplicate subjects on the same date.
+    
+    Strategy:
+      1. Normalize subject by stripping [Gong Out], [Gong In] prefixes
+      2. Group by (normalized_subject, date, company_name)
+      3. Keep one record per group, preferring non-Gong (HubSpot native) records
+    """
+    if df.empty:
+        return df
+
+    pre = len(df)
+    df = df.copy()
+
+    subject_col = "email_subject" if "email_subject" in df.columns else None
+    if subject_col is None:
+        logger.warning("No email_subject column — skipping email dedup.")
+        return df
+
+    # Parse date for grouping
+    date_col = "activity_date" if "activity_date" in df.columns else "create_date"
+    if date_col not in df.columns:
+        logger.warning("No date column for email dedup.")
+        return df
+
+    df["_email_date"] = pd.to_datetime(df[date_col], errors="coerce").dt.date
+
+    # Normalize subject: strip Gong prefixes
+    raw_subject = df[subject_col].fillna("").astype(str)
+    df["_is_gong"] = raw_subject.str.contains(r'^\[Gong (Out|In)\]', regex=True)
+    df["_norm_subject"] = raw_subject.str.replace(r'^\[Gong (Out|In)\]\s*', '', regex=True).str.strip().str.lower()
+
+    # Company for grouping
+    co_col = "company_name" if "company_name" in df.columns else None
+    df["_co"] = df[co_col].fillna("").astype(str).str.strip().str.lower() if co_col else ""
+
+    # Also use from/to for tighter matching
+    from_col = "email_from_address" if "email_from_address" in df.columns else None
+    df["_from"] = df[from_col].fillna("").astype(str).str.strip().str.lower() if from_col else ""
+
+    # Group by normalized subject + date + company + from address
+    group_cols = ["_norm_subject", "_email_date", "_co", "_from"]
+    # Remove groups where subject is empty
+    has_subject = df["_norm_subject"] != ""
+
+    # For rows with subjects, deduplicate
+    with_subject = df[has_subject].copy()
+    without_subject = df[~has_subject].copy()
+
+    if not with_subject.empty:
+        # Sort: non-Gong first so we keep HubSpot native records
+        with_subject = with_subject.sort_values("_is_gong", ascending=True)
+        # Drop duplicates keeping first (non-Gong preferred)
+        deduped = with_subject.drop_duplicates(subset=group_cols, keep="first")
+    else:
+        deduped = with_subject
+
+    result = pd.concat([deduped, without_subject], ignore_index=True)
+
+    # Clean up temp columns
+    result = result.drop(columns=["_email_date", "_is_gong", "_norm_subject", "_co", "_from"], errors="ignore")
+
+    logger.info("Email dedup: %d -> %d rows (removed %d duplicates).",
+                pre, len(result), pre - len(result))
+    return result
+
+
 # -- Column dedup & normalization pipeline --------------------------------
 
 def _deduplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
