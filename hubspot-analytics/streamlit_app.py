@@ -251,6 +251,17 @@ def _safe_sort(df, col, asc=False):
     try: return df.sort_values(col, ascending=asc)
     except: return df
 
+def _display_df(df):
+    """Clean a DataFrame for st.dataframe — fix mixed types that break PyArrow."""
+    df = df.copy()
+    for col in df.columns:
+        if df[col].dtype == object:
+            # Check for mixed Timestamp/string
+            has_ts = df[col].apply(lambda x: isinstance(x, pd.Timestamp)).any()
+            if has_ts:
+                df[col] = pd.to_datetime(df[col], errors="coerce").dt.strftime("%Y-%m-%d %H:%M").fillna("")
+    return df
+
 def kpi(cards):
     html = '<div class="kpi-grid">'
     for label, val, accent in cards:
@@ -353,28 +364,28 @@ if st.session_state.page == "activity":
                 rm = fm[fm["hubspot_owner_name"] == rep] if not fm.empty and "hubspot_owner_name" in fm.columns else pd.DataFrame()
                 if not rm.empty:
                     s = [c for c in ("meeting_start_time", "meeting_name", "company_name", "meeting_outcome", "call_and_meeting_type", "has_gong") if c in rm.columns]
-                    st.dataframe(_safe_sort(rm[s].copy(), s[0]) if s else rm, use_container_width=True, hide_index=True)
+                    st.dataframe(_display_df(_safe_sort(rm[s].copy(), s[0]) if s else rm), use_container_width=True, hide_index=True)
                 else: st.caption("No meetings.")
 
             with t2:
                 rc = fc[fc["hubspot_owner_name"] == rep] if not fc.empty and "hubspot_owner_name" in fc.columns else pd.DataFrame()
                 if not rc.empty:
                     s = [c for c in ("activity_date", "company_name", "call_outcome", "call_direction", "call_duration", "call_and_meeting_type") if c in rc.columns]
-                    st.dataframe(_safe_sort(rc[s].copy(), s[0]) if s else rc, use_container_width=True, hide_index=True)
+                    st.dataframe(_display_df(_safe_sort(rc[s].copy(), s[0]) if s else rc), use_container_width=True, hide_index=True)
                 else: st.caption("No calls.")
 
             with t3:
                 re = fe[fe["hubspot_owner_name"] == rep] if not fe.empty and "hubspot_owner_name" in fe.columns else pd.DataFrame()
                 if not re.empty:
                     s = [c for c in ("activity_date", "email_subject", "company_name", "email_direction", "email_send_status", "email_from_address", "email_to_address") if c in re.columns]
-                    st.dataframe(_safe_sort(re[s].copy(), s[0]) if s else re, use_container_width=True, hide_index=True)
+                    st.dataframe(_display_df(_safe_sort(re[s].copy(), s[0]) if s else re), use_container_width=True, hide_index=True)
                 else: st.caption("No emails.")
 
             with t4:
                 rt = ft[ft["hubspot_owner_name"] == rep] if not ft.empty and "hubspot_owner_name" in ft.columns else pd.DataFrame()
                 if not rt.empty:
                     s = [c for c in ("completed_at", "task_title", "company_name", "task_status", "priority", "task_type") if c in rt.columns]
-                    st.dataframe(_safe_sort(rt[s].copy(), s[0]) if s else rt, use_container_width=True, hide_index=True)
+                    st.dataframe(_display_df(_safe_sort(rt[s].copy(), s[0]) if s else rt), use_container_width=True, hide_index=True)
                 else: st.caption("No tasks.")
 
 
