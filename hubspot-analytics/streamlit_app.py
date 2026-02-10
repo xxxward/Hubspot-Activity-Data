@@ -287,7 +287,9 @@ if st.session_state.page == "activity":
     fc = _fdate_raw(_frep(data.calls), "activity_date")
     ft = _fdate_raw(_frep(data.tasks), "completed_at")
     fe = _fdate_raw(_frep(data.emails), "activity_date")
-    total = len(fm) + len(fc) + len(ft) + len(fe)
+    fn = _fdate_raw(_frep(data.notes), "activity_date")
+    fk = _fdate_raw(_frep(data.tickets), "created_date")
+    total = len(fm) + len(fc) + len(ft) + len(fe) + len(fn) + len(fk)
 
     kpi([
         ("Total", f"{total:,}", ""),
@@ -295,6 +297,8 @@ if st.session_state.page == "activity":
         ("Calls", f"{len(fc):,}", "blue"),
         ("Emails", f"{len(fe):,}", "purple"),
         ("Tasks", f"{len(ft):,}", "amber"),
+        ("Notes", f"{len(fn):,}", ""),
+        ("Tickets", f"{len(fk):,}", "red"),
     ])
 
     # Leaderboard
@@ -305,15 +309,26 @@ if st.session_state.page == "activity":
         m = len(fm[fm["hubspot_owner_name"] == rep]) if not fm.empty and "hubspot_owner_name" in fm.columns else 0
         c = len(fc[fc["hubspot_owner_name"] == rep]) if not fc.empty and "hubspot_owner_name" in fc.columns else 0
         e = len(fe[fe["hubspot_owner_name"] == rep]) if not fe.empty and "hubspot_owner_name" in fe.columns else 0
+        n = len(fn[fn["hubspot_owner_name"] == rep]) if not fn.empty and "hubspot_owner_name" in fn.columns else 0
+        k = len(fk[fk["hubspot_owner_name"] == rep]) if not fk.empty and "hubspot_owner_name" in fk.columns else 0
+
+        # Task completion & overdue
         comp, over = 0, 0
         if not ft.empty and "hubspot_owner_name" in ft.columns:
             rt = ft[ft["hubspot_owner_name"] == rep]
-            if "task_status" in rt.columns and not rt.empty:
-                u = rt["task_status"].astype(str).str.upper().str.strip()
-                comp = int(u.isin({"COMPLETED", "COMPLETE", "DONE"}).sum())
-                over = int(u.isin({"OVERDUE", "PAST_DUE", "DEFERRED"}).sum())
+            if not rt.empty and "task_status" in rt.columns:
+                status = rt["task_status"].astype(str).str.upper().str.strip()
+                comp = int(status.isin({"COMPLETED", "COMPLETE", "DONE"}).sum())
+                # Overdue = status is NOT completed AND due_date < today
+                if "due_date" in rt.columns:
+                    due = pd.to_datetime(rt["due_date"], errors="coerce")
+                    not_done = ~status.isin({"COMPLETED", "COMPLETE", "DONE"})
+                    past_due = due.notna() & (due.dt.date < date.today())
+                    over = int((not_done & past_due).sum())
+
         score = m*WEIGHTS["meetings"] + c*WEIGHTS["calls"] + e*WEIGHTS["emails"] + comp*WEIGHTS["completed_tasks"] + over*WEIGHTS["overdue_tasks"]
-        rows.append({"Rep": rep, "Meetings": m, "Calls": c, "Emails": e, "Tasks": comp, "Overdue": over, "Score": score})
+        rows.append({"Rep": rep, "Meetings": m, "Calls": c, "Emails": e, "Tasks": comp,
+                     "Overdue": over, "Notes": n, "Tickets": k, "Score": score})
 
     lb = pd.DataFrame(rows).sort_values("Score", ascending=False).reset_index(drop=True)
     st.dataframe(lb, use_container_width=True, hide_index=True)
@@ -324,11 +339,12 @@ if st.session_state.page == "activity":
         st.markdown('<div class="sec-title">Activity by Rep</div>', unsafe_allow_html=True)
         if not lb.empty:
             fig = px.bar(
-                lb.melt(id_vars="Rep", value_vars=["Meetings", "Calls", "Emails", "Tasks"],
+                lb.melt(id_vars="Rep", value_vars=["Meetings", "Calls", "Emails", "Tasks", "Notes", "Tickets"],
                         var_name="Type", value_name="Count"),
                 x="Rep", y="Count", color="Type", barmode="group",
                 color_discrete_map={"Meetings": C["meetings"], "Calls": C["calls"],
-                                    "Emails": C["emails"], "Tasks": C["tasks"]},
+                                    "Emails": C["emails"], "Tasks": C["tasks"],
+                                    "Notes": "#8b949e", "Tickets": C["inactive"]},
             )
             fig.update_layout(xaxis_title="", yaxis_title="")
             st.plotly_chart(styled_fig(fig), use_container_width=True)
@@ -358,8 +374,8 @@ if st.session_state.page == "activity":
 
     for _, r in lb.iterrows():
         rep = r["Rep"]
-        with st.expander(f"**{rep}**  ·  {r['Meetings']} mtgs  ·  {r['Calls']} calls  ·  {r['Emails']} emails  ·  {r['Tasks']} tasks  ·  Score {r['Score']}"):
-            t1, t2, t3, t4 = st.tabs(["🟢 Meetings", "🔵 Calls", "🟣 Emails", "🟡 Tasks"])
+        with st.expander(f"**{rep}**  ·  {r['Meetings']} mtgs  ·  {r['Calls']} calls  ·  {r['Emails']} emails  ·  {r['Tasks']} tasks  ·  {r['Notes']} notes  ·  {r['Tickets']} tickets  ·  Score {r['Score']}"):
+            t1, t2, t3, t4, t5, t6 = st.tabs(["🟢 Meetings", "🔵 Calls", "🟣 Emails", "🟡 Tasks", "📝 Notes", "🎫 Tickets"])
 
             with t1:
                 rm = fm[fm["hubspot_owner_name"] == rep] if not fm.empty and "hubspot_owner_name" in fm.columns else pd.DataFrame()
@@ -385,9 +401,31 @@ if st.session_state.page == "activity":
             with t4:
                 rt = ft[ft["hubspot_owner_name"] == rep] if not ft.empty and "hubspot_owner_name" in ft.columns else pd.DataFrame()
                 if not rt.empty:
-                    s = [c for c in ("completed_at", "task_title", "company_name", "task_status", "priority", "task_type") if c in rt.columns]
-                    st.dataframe(_display_df(_safe_sort(rt[s].copy(), s[0]) if s else rt), use_container_width=True, hide_index=True)
+                    # Add overdue flag for display
+                    rt_disp = rt.copy()
+                    if "due_date" in rt_disp.columns and "task_status" in rt_disp.columns:
+                        due = pd.to_datetime(rt_disp["due_date"], errors="coerce")
+                        status = rt_disp["task_status"].astype(str).str.upper().str.strip()
+                        not_done = ~status.isin({"COMPLETED", "COMPLETE", "DONE"})
+                        past_due = due.notna() & (due.dt.date < date.today())
+                        rt_disp["overdue"] = (not_done & past_due).map({True: "⚠️ Yes", False: ""})
+                    s = [c for c in ("due_date", "task_title", "company_name", "task_status", "overdue", "priority", "task_type") if c in rt_disp.columns]
+                    st.dataframe(_display_df(_safe_sort(rt_disp[s].copy(), s[0]) if s else rt_disp), use_container_width=True, hide_index=True)
                 else: st.caption("No tasks.")
+
+            with t5:
+                rn = fn[fn["hubspot_owner_name"] == rep] if not fn.empty and "hubspot_owner_name" in fn.columns else pd.DataFrame()
+                if not rn.empty:
+                    s = [c for c in ("activity_date", "deal_name", "company_name", "note_body") if c in rn.columns]
+                    st.dataframe(_display_df(_safe_sort(rn[s].copy(), s[0]) if s else rn), use_container_width=True, hide_index=True)
+                else: st.caption("No notes.")
+
+            with t6:
+                rk = fk[fk["hubspot_owner_name"] == rep] if not fk.empty and "hubspot_owner_name" in fk.columns else pd.DataFrame()
+                if not rk.empty:
+                    s = [c for c in ("created_date", "ticket_name", "company_name", "ticket_status", "priority", "ticket_category") if c in rk.columns]
+                    st.dataframe(_display_df(_safe_sort(rk[s].copy(), s[0]) if s else rk), use_container_width=True, hide_index=True)
+                else: st.caption("No tickets.")
 
 
 # ════════════════════════════════════════════════════════════════════════
