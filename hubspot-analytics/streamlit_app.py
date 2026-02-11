@@ -880,7 +880,7 @@ elif st.session_state.page == "calls":
             dir_data = fc["call_direction"].value_counts().reset_index()
             dir_data.columns = ["Direction", "Count"]
             fig_dir = px.pie(dir_data, names="Direction", values="Count", hole=0.5,
-                             color_discrete_sequence=[C["calls"], C["purple"]])
+                             color_discrete_sequence=[C["calls"], C["emails"]])
             fig_dir.update_traces(textinfo="label+percent", textfont=dict(color="#ede9fc", size=11))
             st.plotly_chart(styled_fig(fig_dir, 260), use_container_width=True)
 
@@ -965,7 +965,7 @@ elif st.session_state.page == "meetings":
             if "call_and_meeting_type" in fm.columns:
                 bt = fm["call_and_meeting_type"].value_counts().reset_index()
                 bt.columns = ["Type", "Count"]
-                fig = px.bar(bt, y="Type", x="Count", orientation="h", color_discrete_sequence=[C["purple"]])
+                fig = px.bar(bt, y="Type", x="Count", orientation="h", color_discrete_sequence=[C["emails"]])
                 fig.update_layout(xaxis_title="", yaxis_title="")
                 st.plotly_chart(styled_fig(fig, 260), use_container_width=True)
 
