@@ -1052,7 +1052,7 @@ elif st.session_state.page == "tasks":
             if "priority" in ft.columns:
                 tp = ft["priority"].value_counts().reset_index()
                 tp.columns = ["Priority", "Count"]
-                fig = px.bar(tp, x="Priority", y="Count", color_discrete_sequence=[C["amber"]])
+                fig = px.bar(tp, x="Priority", y="Count", color_discrete_sequence=[C["tasks"]])
                 fig.update_layout(xaxis_title="", yaxis_title="")
                 st.plotly_chart(styled_fig(fig, 260), use_container_width=True)
 
@@ -1117,7 +1117,7 @@ elif st.session_state.page == "tickets":
             section_header("📊", "Open vs Closed", C["tickets"])
             oc_data = pd.DataFrame({"Status": ["Open", "Closed"], "Count": [n_open, n_closed]})
             fig = px.pie(oc_data, names="Status", values="Count", hole=0.5,
-                         color="Status", color_discrete_map={"Open": C["amber"], "Closed": C["active"]})
+                         color="Status", color_discrete_map={"Open": C["tasks"], "Closed": C["active"]})
             fig.update_traces(textinfo="label+value", textfont=dict(color="#ede9fc", size=12))
             st.plotly_chart(styled_fig(fig, 280), use_container_width=True)
 
