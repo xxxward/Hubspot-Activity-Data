@@ -680,7 +680,7 @@ def build_leaderboard():
                 if "due_date" in rt.columns:
                     due = pd.to_datetime(rt["due_date"], errors="coerce")
                     not_done = ~status.isin({"COMPLETED", "COMPLETE", "DONE"})
-                    past_due = due.notna() & (due.dt.date < date.today())
+                    past_due = due.notna() & (due < pd.Timestamp(date.today()))
                     over = int((not_done & past_due).sum())
 
         score = m*WEIGHTS["meetings"] + c*WEIGHTS["calls"] + e*WEIGHTS["emails"] + comp*WEIGHTS["completed_tasks"] + over*WEIGHTS["overdue_tasks"]
@@ -1023,7 +1023,7 @@ elif st.session_state.page == "tasks":
             if "due_date" in ft.columns:
                 due = pd.to_datetime(ft["due_date"], errors="coerce")
                 not_done = ~status.isin({"COMPLETED", "COMPLETE", "DONE"})
-                past_due = due.notna() & (due.dt.date < date.today())
+                past_due = due.notna() & (due < pd.Timestamp(date.today()))
                 n_overdue = int((not_done & past_due).sum())
 
         comp_rate = f"{n_comp/n_tasks*100:.0f}%" if n_tasks > 0 else "—"
@@ -1074,7 +1074,7 @@ elif st.session_state.page == "tasks":
             due = pd.to_datetime(ft_disp["due_date"], errors="coerce")
             stat = ft_disp["task_status"].astype(str).str.upper().str.strip()
             not_done = ~stat.isin({"COMPLETED", "COMPLETE", "DONE"})
-            past_due = due.notna() & (due.dt.date < date.today())
+            past_due = due.notna() & (due < pd.Timestamp(date.today()))
             ft_disp["Overdue?"] = (not_done & past_due).map({True: "⚠️ Yes", False: ""})
 
         task_cols = [c for c in ("due_date", "hubspot_owner_name", "company_name", "task_title",
