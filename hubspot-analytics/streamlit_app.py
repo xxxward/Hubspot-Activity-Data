@@ -574,14 +574,14 @@ def _fdate_raw(df, date_col="activity_date"):
     for col in (date_col, "activity_date", "meeting_start_time", "created_date"):
         if col in df.columns:
             dt = pd.to_datetime(df[col], errors="coerce")
-            mask = dt.notna() & (dt.dt.date >= start_date) & (dt.dt.date <= end_date)
+            mask = dt.notna() & (dt >= pd.Timestamp(start_date)) & (dt <= pd.Timestamp(end_date))
             return df[mask].copy()
     return df
 
 def _fdate(df, col="period_day"):
     if df.empty or col not in df.columns: return df
-    dt = pd.to_datetime(df[col], errors="coerce").dt.date
-    return df[(dt >= start_date) & (dt <= end_date)].copy()
+    dt = pd.to_datetime(df[col], errors="coerce")
+    return df[(dt >= pd.Timestamp(start_date)) & (dt <= pd.Timestamp(end_date))].copy()
 
 def _safe_sort(df, col, asc=False):
     try: return df.sort_values(col, ascending=asc)
@@ -652,7 +652,7 @@ if not ft_all.empty:
         if try_col in ft_all.columns:
             candidate = pd.to_datetime(ft_all[try_col], errors="coerce")
             task_dt = task_dt.fillna(candidate)
-    ft = ft_all[task_dt.notna() & (task_dt.dt.date >= start_date) & (task_dt.dt.date <= end_date)].copy()
+    ft = ft_all[task_dt.notna() & (task_dt >= pd.Timestamp(start_date)) & (task_dt <= pd.Timestamp(end_date))].copy()
 else:
     ft = ft_all
 
@@ -1399,12 +1399,13 @@ When you see patterns of failed outreach (unanswered emails, left voicemails, no
 - Creating urgency with lead time warnings, minimum order changes, or pricing shifts
 - Referencing a competitor win or industry trend relevant to their product line
 - Having a senior leader (Kyle Bissell, VP Sales) reach out directly
-- Sending a "breakup email" that reverses the dynamic and creates FOMO
 - Offering a value-add like a packaging audit, compliance review, or cost comparison
 - Connecting them with an existing customer reference in a similar market
 - Sending physical samples of new products or updated packaging options
 
-Be direct, specific, and brief. No fluff. Use the activity data to identify the real pattern and prescribe the right medicine.""",
+Be direct, specific, and brief. No fluff. Use the activity data to identify the real pattern and prescribe the right medicine.
+
+IMPORTANT: Do NOT recommend breakup emails, ultimatums, or threatening to walk away. These are real relationships — keep the tone warm and persistent. A quiet deal doesn't mean a dead deal. Focus on adding value and finding creative new angles to re-engage.""",
                                             messages=[{"role": "user", "content": f"""Analyze this deal:
 
 1. **Momentum** (1 sentence): Accelerating, stalling, or dead?
