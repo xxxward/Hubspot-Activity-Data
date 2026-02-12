@@ -738,6 +738,50 @@ ROLE_LABELS = {
     "ceo": "👑 CEO",
 }
 
+# ── Per-Rep Coaching Profiles ──
+REP_COACHING = {
+    "Owen Labombard": {
+        "tone": "encouraging_supportive",
+        "voice": """COACHING TONE FOR OWEN: Owen is a newer SDR who's still building confidence. Be encouraging and supportive. Celebrate what he's doing right before suggesting improvements. Use phrases like "nice work on...", "you're building good momentum with...", "one thing that could level this up...". Frame suggestions as growth opportunities, not corrections. He needs to feel like he's winning and learning, not failing.""",
+    },
+    "Lance Mitton": {
+        "tone": "challenging_direct",
+        "voice": """COACHING TONE FOR LANCE: Lance responds to being challenged. He's competitive and wants to be pushed. Be direct — "this deal is slipping and here's why", "you're leaving money on the table", "the activity says you've gone quiet — what's the play?". Don't sugarcoat. Use competitive framing like "deals like this close when reps do X" or "top performers would..." He'll respect bluntness and tune out fluff.""",
+    },
+    "Brad Sherman": {
+        "tone": "no_bs_concise",
+        "voice": """COACHING TONE FOR BRAD: Brad is a no-BS northeast personality. He'll view this as a waste of time if it doesn't immediately help him. Be EXTREMELY concise — 2 sentences max per deal. No motivational language, no filler, no "great job" unless it's genuinely warranted. Just: what's happening, what to do. If you can say it in 5 words, don't use 10. He respects efficiency above all else.""",
+    },
+    "Jake Lynch": {
+        "tone": "collaborative_strategic",
+        "voice": """COACHING TONE FOR JAKE: Jake is a senior AM — treat him as a peer, not a direct report. Use collaborative language: "what if we tried...", "one angle worth exploring...", "thinking about this together...". He's strategic and wants to understand the WHY behind the recommendation. Connect the dots between activity patterns and business outcomes. Respect his experience — frame suggestions as options, not instructions.""",
+    },
+    "Dave Borkowski": {
+        "tone": "inception_suggestive",
+        "voice": """COACHING TONE FOR DAVE: Dave is senior but benefits from having ideas planted rather than handed to him. Use inception-style coaching — make him think the idea is his. Phrases like "have you considered...", "I wonder if...", "something interesting I noticed is...", "one thing that could be worth exploring...". Don't be prescriptive. Frame everything as an observation or question that naturally leads to the right action. He responds best when he feels ownership of the strategy.""",
+    },
+    "Alex Gonzalez": {
+        "tone": "executive_brief",
+        "voice": """COACHING TONE FOR ALEX: Alex is the CEO. Keep it extremely brief and high-level. He doesn't need tactical advice — just flag what needs his attention and why. One sentence per deal max.""",
+    },
+}
+
+def _get_coaching_profile(rep_name):
+    """Get the coaching voice instructions for a specific rep."""
+    profile = REP_COACHING.get(rep_name, {})
+    return profile.get("voice", "Be direct, specific, and helpful. One clear insight, one clear action.")
+
+def _get_role_context(rep_name):
+    """Get role-aware context string for the AI."""
+    role = REP_ROLES.get(rep_name, "acquisition")
+    role_contexts = {
+        "sdr": "This rep is an SDR — their job is outbound prospecting and booking meetings. Calls are their bread and butter, but the REAL win is converting outreach into face-to-face meetings. Coach accordingly.",
+        "acquisition": "This rep is on the Acquisition team — they're hunting new business with lower-value deals ($1K-$10K) and quicker sales cycles. Speed and volume matter. They should be moving deals fast, not nursing them for months.",
+        "am": "This rep is a senior Account Manager handling existing relationships and growth deals. These are higher-value, longer-cycle deals ($10K-$100K+). Relationships and strategic engagement matter more than volume. Every touch should be intentional.",
+        "ceo": "This is the CEO — their deals often bypass normal HubSpot pipelines and go straight to NetSuite. Activity in HubSpot won't reflect their full engagement. Keep coaching minimal and high-level.",
+    }
+    return role_contexts.get(role, "")
+
 # ── Role-Based Activity Weights ──
 ROLE_WEIGHTS = {
     "sdr": {
@@ -1944,10 +1988,19 @@ elif st.session_state.page == "deals":
                         pipeline_context += ctx + "\n"
 
                     # 1) Get executive summary for the whole pipeline
+                    coaching_voice = _get_coaching_profile(rep)
+                    role_context = _get_role_context(rep)
+
                     summary_resp = client.messages.create(
                         model="claude-sonnet-4-20250514",
                         max_tokens=600,
-                        system="""You are a sharp, warm sales ops coach at Calyx Containers (cannabis packaging). Write a 3-4 sentence executive summary of this rep's pipeline health. Be specific about which deals look good, which need work, and one overarching pattern. Reference specific deal names. Keep it conversational and motivating. No markdown formatting — just clean prose.""",
+                        system=f"""You are a seasoned sales coach at Calyx Containers (cannabis packaging) writing a personalized pipeline overview for a specific rep. This goes in an email — it should feel like a quick coaching huddle, not a report card.
+
+{coaching_voice}
+
+{role_context}
+
+Write 3-4 sentences summarizing this rep's pipeline health. Be specific — mention deal names, call out what's working and what needs attention. Adapt your tone to this specific rep's coaching profile above. No markdown formatting — just clean, conversational prose.""",
                         messages=[{"role": "user", "content": pipeline_context}]
                     )
                     ai_summary = summary_resp.content[0].text
@@ -1963,11 +2016,23 @@ elif st.session_state.page == "deals":
                     deals_resp = client.messages.create(
                         model="claude-sonnet-4-20250514",
                         max_tokens=2500,
-                        system="""You are a sharp sales ops analyst at Calyx Containers. For each deal, write exactly 2 sentences: what's happening and one creative action for this week. Be specific about dates. No breakup emails or ultimatums — keep it warm and tactical. No markdown — plain text only.
+                        system=f"""You are a seasoned sales coach at Calyx Containers giving deal-by-deal coaching notes for a specific rep. Each note goes inside a deal card in a beautiful HTML email.
+
+{coaching_voice}
+
+{role_context}
+
+For each deal, write 1-2 sentences in the coaching style above. Include:
+- What's really happening (read the activity direction — who's reaching out, who's responding?)
+- One specific action, adapted to the deal size and close date urgency
+- Be specific about dates ("since Feb 3" not "recently")
+- Never recommend breakup emails or ultimatums
+
+No markdown — plain text only. Keep it tight.
 
 Format each as:
 DEAL: [exact deal name from the data]
-ANALYSIS: [2 sentences]""",
+ANALYSIS: [your coaching note]""",
                         messages=[{"role": "user", "content": deals_prompt}]
                     )
 
@@ -2149,8 +2214,11 @@ ANALYSIS: [2 sentences]""",
                             st.dataframe(timeline, use_container_width=True, hide_index=True)
 
                             btn_key = f"ai_{rep}_{didx}_{dn_key[:30]}"
-                            if st.button("🤖 Analyze Deal Health", key=btn_key):
-                                with st.spinner("Analyzing..."):
+                            if st.button("🧠 Coach Me on This Deal", key=btn_key):
+                                with st.spinner("Thinking..."):
+                                    coaching_voice = _get_coaching_profile(rep)
+                                    role_context = _get_role_context(rep)
+
                                     deal_info = f"TODAY'S DATE: {date.today().strftime('%Y-%m-%d')} ({date.today().strftime('%A')})\n\n"
                                     deal_info += f"Deal: {deal_row.get('deal_name', '')}\n"
                                     deal_info += f"Company: {deal_row.get('company_name', '')}\n"
@@ -2169,37 +2237,37 @@ ANALYSIS: [2 sentences]""",
                                         client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
                                         response = client.messages.create(
                                             model="claude-sonnet-4-20250514",
-                                            max_tokens=600,
-                                            system="""You are a sharp sales ops analyst at Calyx Containers, a cannabis packaging company (concentrate jars, drams, tubes, boxes, flexpack, labels). You analyze deal activity and give actionable, creative recommendations.
+                                            max_tokens=500,
+                                            system=f"""You are a seasoned sales coach at Calyx Containers, a cannabis packaging company (concentrate jars, drams, tubes, boxes, flexpack, labels). Think of yourself as the best VP of Sales the rep has ever worked with — someone who pulls up a deal, immediately sees the story the data tells, and gives one sharp piece of coaching.
 
-When you see patterns of failed outreach (unanswered emails, left voicemails, no-shows, ghosting), don't just say "follow up again." Instead suggest creative re-engagement tactics like:
-- Sending a relevant industry article, market data, or regulatory update that affects their business
-- Reaching out to a different contact at the company (procurement, operations, marketing)
-- Engaging via a different channel (LinkedIn, text, drop-in visit, send samples)
-- Creating urgency with lead time warnings, minimum order changes, or pricing shifts
-- Referencing a competitor win or industry trend relevant to their product line
-- Having a senior leader (Kyle Bissell, VP Sales) reach out directly
-- Offering a value-add like a packaging audit, compliance review, or cost comparison
-- Connecting them with an existing customer reference in a similar market
-- Sending physical samples of new products or updated packaging options
+You are NOT an analyst writing a report. You are a coach talking to a specific person. Adapt your voice to THIS rep.
 
-Be direct, specific, and brief. No fluff. Use the activity data to identify the real pattern and prescribe the right medicine.
+{coaching_voice}
 
-IMPORTANT: Today's date is provided at the top of the deal info. Pay close attention to HOW RECENT each activity is — "yesterday" and "2 weeks ago" tell very different stories. Reference specific dates and timeframes in your analysis (e.g., "the meeting yesterday" not "a recent meeting").
+{role_context}
 
-IMPORTANT: Do NOT recommend breakup emails, ultimatums, or threatening to walk away. These are real relationships — keep the tone warm and persistent. A quiet deal doesn't mean a dead deal. Focus on adding value and finding creative new angles to re-engage.""",
-                                            messages=[{"role": "user", "content": f"""Analyze this deal:
+COACHING APPROACH:
+- Read the activity timeline like a story — WHO is reaching out, WHO is responding? One-way outreach is a red flag. Back-and-forth is healthy.
+- Consider the deal size: a $2,000 dram order needs a quick nudge, not a 3-week campaign. A $50,000 renewal deserves strategic multi-touch.
+- Check the close date: if it's approaching fast, create urgency. If it's months out, focus on building the relationship.
+- Give ONE clear insight about what's really happening, then ONE specific action for this week.
+- Be specific about dates — "your meeting yesterday" not "a recent meeting", "they haven't responded since Feb 3" not "they've been quiet."
+- Never recommend breakup emails or ultimatums. These are real relationships.
+- Keep it conversational — this should feel like a quick coaching huddle, not a performance review.
 
-1. **Momentum** (1 sentence): Accelerating, stalling, or dead?
-2. **Pattern** (1 sentence): What does the activity tell us? (one-way outreach, mutual engagement, going dark, etc.)
-3. **Risk** (1 sentence): Biggest threat to closing?
-4. **Action** (2-3 sentences): What should the rep do THIS WEEK? Be creative and tactical.
-
-{deal_info}"""}]
+CREATIVE RE-ENGAGEMENT IDEAS (when deals go quiet):
+- Send a relevant industry article or regulatory update
+- Reach out to a different contact at the company
+- Try a different channel (LinkedIn, text, samples, drop-in)
+- Create urgency with lead time or pricing changes
+- Have Kyle Bissell (VP Sales) make a personal touchpoint
+- Offer a value-add: packaging audit, compliance review, cost comparison
+- Send physical samples of new products""",
+                                            messages=[{"role": "user", "content": f"Coach me on this deal:\n\n{deal_info}"}]
                                         )
                                         st.markdown(response.content[0].text)
                                     except Exception as e:
-                                        st.warning(f"AI analysis unavailable: {e}")
+                                        st.warning(f"AI coaching unavailable: {e}")
 
         section_divider()
 
