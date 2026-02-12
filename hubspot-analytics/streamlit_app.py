@@ -592,14 +592,14 @@ def _fdate_raw(df, date_col="activity_date"):
     for col in (date_col, "activity_date", "meeting_start_time", "created_date"):
         if col in df.columns:
             dt = pd.to_datetime(df[col], errors="coerce")
-            mask = dt.notna() & (dt >= pd.Timestamp(start_date)) & (dt <= pd.Timestamp(end_date))
+            mask = dt.notna() & (dt >= pd.Timestamp(start_date)) & (dt <= pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1))
             return df[mask].copy()
     return df
 
 def _fdate(df, col="period_day"):
     if df.empty or col not in df.columns: return df
     dt = pd.to_datetime(df[col], errors="coerce")
-    return df[(dt >= pd.Timestamp(start_date)) & (dt <= pd.Timestamp(end_date))].copy()
+    return df[(dt >= pd.Timestamp(start_date)) & (dt <= pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1))].copy()
 
 def _safe_sort(df, col, asc=False):
     try: return df.sort_values(col, ascending=asc)
@@ -670,7 +670,7 @@ if not ft_all.empty:
         if try_col in ft_all.columns:
             candidate = pd.to_datetime(ft_all[try_col], errors="coerce")
             task_dt = task_dt.fillna(candidate)
-    ft = ft_all[task_dt.notna() & (task_dt >= pd.Timestamp(start_date)) & (task_dt <= pd.Timestamp(end_date))].copy()
+    ft = ft_all[task_dt.notna() & (task_dt >= pd.Timestamp(start_date)) & (task_dt <= pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1))].copy()
 else:
     ft = ft_all
 
@@ -1322,8 +1322,215 @@ elif st.session_state.page == "deals":
         }
         CC_EMAILS = ["xward@calyxcontainers.com", "kbissell@calyxcontainers.com"]
 
+        def _health_color(h):
+            return {"Active": "#34d399", "Stale": "#fbbf24", "Inactive": "#fb7185", "No Activity": "#6a6283"}.get(h, "#6a6283")
+
+        def _health_label(h):
+            return {"Active": "✅ Active", "Stale": "⚠️ Stale", "Inactive": "🔴 Inactive", "No Activity": "⚫ No Activity"}.get(h, h)
+
+        def _hex_to_rgb(hex_color):
+            """Convert #rrggbb to 'r,g,b' for rgba()."""
+            h = hex_color.lstrip("#")
+            return f"{int(h[0:2],16)},{int(h[2:4],16)},{int(h[4:6],16)}"
+
+        def build_html_email(rep, rep_first, rd, ai_summary, ai_deal_analyses):
+            """Build a stunning HTML email for a rep's pipeline report."""
+            today_str = date.today().strftime("%B %d, %Y")
+            total_val = rd["amount"].sum() if "amount" in rd.columns else 0
+            n_deals = len(rd)
+            n_active = len(rd[rd["health"] == "Active"])
+            n_stale = len(rd[rd["health"] == "Stale"])
+            n_inactive = len(rd[rd["health"].isin(["Inactive", "No Activity"])])
+
+            # Sort deals: needs attention first, then active
+            deal_order = {"Inactive": 0, "No Activity": 1, "Stale": 2, "Active": 3}
+            rd_sorted = rd.copy()
+            rd_sorted["_sort"] = rd_sorted["health"].map(deal_order).fillna(4)
+            rd_sorted = rd_sorted.sort_values(["_sort", "amount"], ascending=[True, False])
+
+            # Build deal cards HTML
+            deal_cards_html = ""
+            for _, d in rd_sorted.iterrows():
+                dn = d.get("deal_name", "Unknown")
+                co = d.get("company_name", "")
+                stage = d.get("deal_stage", "")
+                amt = d.get("amount", 0)
+                health = d.get("health", "No Activity")
+                days_idle = d.get("days_idle", None)
+                a30 = d.get("a30", 0)
+                hcolor = _health_color(health)
+                hlabel = _health_label(health)
+                idle_str = f"{int(days_idle)}d ago" if days_idle is not None else "—"
+                forecast = d.get("forecast_category", "")
+
+                # Get AI analysis for this deal
+                dn_key = str(dn).strip().lower()
+                deal_ai = ai_deal_analyses.get(dn_key, "")
+                deal_ai_html = ""
+                if deal_ai:
+                    deal_ai_html = f'''
+                    <tr><td colspan="4" style="padding:12px 16px 16px;border-top:1px solid #2d2750;">
+                        <div style="background:#1a1530;border-radius:8px;padding:14px 16px;border-left:3px solid {hcolor};">
+                            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#9b93b7;margin-bottom:8px;">🤖 AI Insight</div>
+                            <div style="font-size:13px;color:#c4bfdb;line-height:1.6;">{deal_ai}</div>
+                        </div>
+                    </td></tr>'''
+
+                deal_cards_html += f'''
+                <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:12px;border-radius:12px;overflow:hidden;border:1px solid #2d2750;background:#151228;">
+                    <tr>
+                        <td colspan="4" style="height:3px;background:{hcolor};font-size:0;line-height:0;">&nbsp;</td>
+                    </tr>
+                    <tr>
+                        <td colspan="3" style="padding:16px 16px 4px;">
+                            <div style="font-size:15px;font-weight:700;color:#ede9fc;">{dn}</div>
+                            <div style="font-size:12px;color:#9b93b7;margin-top:2px;">{co}</div>
+                        </td>
+                        <td style="padding:16px 16px 4px;text-align:right;vertical-align:top;">
+                            <span style="display:inline-block;font-size:11px;font-weight:700;color:{hcolor};background:rgba({_hex_to_rgb(hcolor)},0.12);padding:3px 10px;border-radius:6px;">{hlabel}</span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding:8px 16px 14px;width:25%;">
+                            <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:#6a6283;">Amount</div>
+                            <div style="font-size:16px;font-weight:800;color:#818cf8;margin-top:2px;">${amt:,.0f}</div>
+                        </td>
+                        <td style="padding:8px 16px 14px;width:25%;">
+                            <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:#6a6283;">Stage</div>
+                            <div style="font-size:12px;font-weight:600;color:#c4bfdb;margin-top:4px;">{stage}</div>
+                        </td>
+                        <td style="padding:8px 16px 14px;width:25%;">
+                            <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:#6a6283;">Last Touch</div>
+                            <div style="font-size:12px;font-weight:600;color:#c4bfdb;margin-top:4px;">{idle_str}</div>
+                        </td>
+                        <td style="padding:8px 16px 14px;width:25%;">
+                            <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:#6a6283;">30d Activity</div>
+                            <div style="font-size:12px;font-weight:600;color:#c4bfdb;margin-top:4px;">{a30} touches</div>
+                        </td>
+                    </tr>
+                    {deal_ai_html}
+                </table>'''
+
+            # Assemble full email
+            html = f'''<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Pipeline Health Report</title></head>
+<body style="margin:0;padding:0;background:#080614;font-family:'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+
+<!-- Preheader -->
+<div style="display:none;max-height:0;overflow:hidden;font-size:1px;color:#080614;">
+    {rep_first}, your pipeline report is ready — {n_deals} deals, ${total_val:,.0f} in play.
+</div>
+
+<!-- Outer wrapper -->
+<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#080614;padding:20px 0;">
+<tr><td align="center">
+
+<!-- Main container -->
+<table width="640" cellpadding="0" cellspacing="0" border="0" style="max-width:640px;width:100%;background:#0c0a1a;border-radius:16px;overflow:hidden;border:1px solid #1e1a35;">
+
+    <!-- Header with gradient -->
+    <tr><td style="background:linear-gradient(135deg,#1a1145 0%,#1e1535 50%,#1a1230 100%);padding:40px 32px 32px;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+                <td>
+                    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2.5px;color:#818cf8;margin-bottom:8px;">Calyx Activity Hub</div>
+                    <div style="font-size:26px;font-weight:800;color:#ede9fc;line-height:1.2;">Pipeline Health Report</div>
+                    <div style="font-size:13px;color:#9b93b7;margin-top:6px;">{today_str}</div>
+                </td>
+                <td width="80" style="text-align:right;vertical-align:top;">
+                    <div style="width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#818cf8,#c084fc,#f472b6);display:inline-block;text-align:center;line-height:56px;font-size:20px;font-weight:800;color:#0c0a1a;">{"".join([w[0] for w in rep.split()[:2]]).upper()}</div>
+                </td>
+            </tr>
+        </table>
+    </td></tr>
+
+    <!-- Greeting -->
+    <tr><td style="padding:28px 32px 0;">
+        <div style="font-size:16px;color:#ede9fc;line-height:1.5;">Hey {rep_first} 👋</div>
+        <div style="font-size:14px;color:#9b93b7;line-height:1.6;margin-top:8px;">Here's your weekly pipeline intelligence report. Every deal, every signal, every recommendation — all in one place.</div>
+    </td></tr>
+
+    <!-- Pipeline Snapshot KPIs -->
+    <tr><td style="padding:24px 32px;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+                <td width="25%" style="padding:0 4px 0 0;">
+                    <div style="background:#151228;border:1px solid #2d2750;border-radius:12px;padding:16px;text-align:center;border-top:3px solid #a78bfa;">
+                        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:#9b93b7;">Deals</div>
+                        <div style="font-size:24px;font-weight:800;color:#a78bfa;margin-top:4px;">{n_deals}</div>
+                    </div>
+                </td>
+                <td width="25%" style="padding:0 4px;">
+                    <div style="background:#151228;border:1px solid #2d2750;border-radius:12px;padding:16px;text-align:center;border-top:3px solid #818cf8;">
+                        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:#9b93b7;">Pipeline</div>
+                        <div style="font-size:24px;font-weight:800;color:#818cf8;margin-top:4px;">${total_val:,.0f}</div>
+                    </div>
+                </td>
+                <td width="25%" style="padding:0 4px;">
+                    <div style="background:#151228;border:1px solid #2d2750;border-radius:12px;padding:16px;text-align:center;border-top:3px solid #34d399;">
+                        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:#9b93b7;">Active</div>
+                        <div style="font-size:24px;font-weight:800;color:#34d399;margin-top:4px;">{n_active}</div>
+                    </div>
+                </td>
+                <td width="25%" style="padding:0 0 0 4px;">
+                    <div style="background:#151228;border:1px solid #2d2750;border-radius:12px;padding:16px;text-align:center;border-top:3px solid #fb7185;">
+                        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:#9b93b7;">Attention</div>
+                        <div style="font-size:24px;font-weight:800;color:#fb7185;margin-top:4px;">{n_stale + n_inactive}</div>
+                    </div>
+                </td>
+            </tr>
+        </table>
+    </td></tr>
+
+    <!-- AI Executive Summary -->
+    <tr><td style="padding:0 32px 24px;">
+        <div style="background:linear-gradient(135deg,#1a1530 0%,#1e1535 100%);border:1px solid #2d2750;border-radius:12px;padding:24px;border-left:4px solid #c084fc;">
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:#c084fc;margin-bottom:12px;">🧠 AI Pipeline Summary</div>
+            <div style="font-size:14px;color:#c4bfdb;line-height:1.7;">{ai_summary}</div>
+        </div>
+    </td></tr>
+
+    <!-- Section: Deal Cards -->
+    <tr><td style="padding:0 32px 8px;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+                <td style="height:1px;background:linear-gradient(90deg,transparent,#2d2750,transparent);"></td>
+            </tr>
+        </table>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:#9b93b7;margin:20px 0 16px;padding-left:2px;">📋 Deal-by-Deal Breakdown</div>
+    </td></tr>
+
+    <tr><td style="padding:0 32px 24px;">
+        {deal_cards_html}
+    </td></tr>
+
+    <!-- Footer -->
+    <tr><td style="padding:24px 32px 32px;border-top:1px solid #1e1a35;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+                <td>
+                    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:#818cf8;margin-bottom:4px;">Calyx Activity Hub</div>
+                    <div style="font-size:11px;color:#6a6283;line-height:1.6;">Powered by AI · Generated {today_str}</div>
+                    <div style="font-size:11px;color:#6a6283;margin-top:4px;">Questions? Reach out to Xander Ward or Kyle Bissell.</div>
+                </td>
+                <td style="text-align:right;vertical-align:bottom;">
+                    <div style="font-size:20px;">📊</div>
+                </td>
+            </tr>
+        </table>
+    </td></tr>
+
+</table>
+<!-- End main container -->
+
+</td></tr>
+</table>
+</body></html>'''
+            return html
+
         section_header("📧", "Pipeline Health Reports", C["emails"])
-        st.markdown("Generate AI-powered pipeline summaries and email them to each rep (CC: Xander & Kyle).", unsafe_allow_html=True)
+        st.markdown("Generate AI-powered pipeline reports with deal-by-deal analysis and email them to each rep (CC: Xander & Kyle).", unsafe_allow_html=True)
 
         if st.button("📧  Generate & Email Pipeline Reports", key="email_reports", type="primary"):
             try:
@@ -1341,136 +1548,176 @@ elif st.session_state.page == "deals":
                 smtp_from = st.secrets.get("SMTP_FROM", smtp_user)
 
                 progress_bar = st.progress(0, text="Starting pipeline analysis...")
-                report_results = {}
+                report_results = {}  # rep -> (ai_summary, ai_deal_analyses, rd)
                 reps_to_report = [r for r in selected_reps if r in REP_EMAILS]
                 total_reps = len(reps_to_report)
 
                 for rep_idx, rep in enumerate(reps_to_report):
                     progress_bar.progress(
-                        (rep_idx) / total_reps,
+                        rep_idx / max(total_reps, 1),
                         text=f"Analyzing {rep}'s pipeline ({rep_idx + 1}/{total_reps})..."
                     )
 
                     rd = mg[mg["hubspot_owner_name"] == rep] if "hubspot_owner_name" in mg.columns else pd.DataFrame()
                     if rd.empty:
-                        report_results[rep] = "No active deals in pipeline."
+                        report_results[rep] = ("No active deals in pipeline.", {}, rd)
                         continue
 
-                    # Build comprehensive pipeline context for this rep
-                    pipeline_context = f"TODAY'S DATE: {date.today().strftime('%Y-%m-%d')} ({date.today().strftime('%A')})\n\n"
+                    # Build comprehensive pipeline context
+                    pipeline_context = f"TODAY'S DATE: {date.today().strftime('%Y-%m-%d')} ({date.today().strftime('%A')})\n"
                     pipeline_context += f"REP: {rep}\n"
                     pipeline_context += f"TOTAL ACTIVE DEALS: {len(rd)}\n"
                     pipeline_context += f"TOTAL PIPELINE VALUE: ${rd['amount'].sum():,.0f}\n" if "amount" in rd.columns else ""
-                    n_active = len(rd[rd["health"] == "Active"])
-                    n_attention = len(rd) - n_active
-                    pipeline_context += f"DEALS ACTIVE (7d): {n_active} | NEEDS ATTENTION: {n_attention}\n\n"
-                    pipeline_context += "=" * 60 + "\n"
-                    pipeline_context += "DEAL-BY-DEAL BREAKDOWN:\n"
-                    pipeline_context += "=" * 60 + "\n\n"
+                    n_act_rep = len(rd[rd["health"] == "Active"])
+                    n_att_rep = len(rd) - n_act_rep
+                    pipeline_context += f"DEALS ACTIVE (7d): {n_act_rep} | NEEDS ATTENTION: {n_att_rep}\n\n"
 
+                    deal_contexts = {}
                     for _, deal_row in rd.iterrows():
-                        dn_key = str(deal_row.get("deal_name", "")).strip().lower()
-                        pipeline_context += f"--- {deal_row.get('deal_name', 'Unknown')} ---\n"
-                        pipeline_context += f"  Company: {deal_row.get('company_name', '')}\n"
-                        pipeline_context += f"  Stage: {deal_row.get('deal_stage', '')}\n"
-                        pipeline_context += f"  Forecast: {deal_row.get('forecast_category', '')}\n"
-                        pipeline_context += f"  Amount: ${deal_row.get('amount', 0):,.0f}\n"
-                        pipeline_context += f"  Close Date: {deal_row.get('close_date', '')}\n"
-                        pipeline_context += f"  Health: {deal_row.get('health', '')} | Days Idle: {deal_row.get('days_idle', 'N/A')}\n"
-                        pipeline_context += f"  Activity (30d): {deal_row.get('a30', 0)} | Total: {deal_row.get('total', 0)}\n"
-                        pipeline_context += f"  Breakdown: {deal_row.get('calls', 0)} calls, {deal_row.get('mtgs', 0)} mtgs, {deal_row.get('emails', 0)} emails, {deal_row.get('tasks', 0)} tasks\n"
-
-                        # Add recent activity timeline if available
+                        dn = str(deal_row.get("deal_name", "Unknown"))
+                        dn_key = dn.strip().lower()
+                        ctx = f"Deal: {dn}\n"
+                        ctx += f"  Company: {deal_row.get('company_name', '')}\n"
+                        ctx += f"  Stage: {deal_row.get('deal_stage', '')}\n"
+                        ctx += f"  Forecast: {deal_row.get('forecast_category', '')}\n"
+                        ctx += f"  Amount: ${deal_row.get('amount', 0):,.0f}\n"
+                        ctx += f"  Close Date: {deal_row.get('close_date', '')}\n"
+                        ctx += f"  Health: {deal_row.get('health', '')} | Days Idle: {deal_row.get('days_idle', 'N/A')}\n"
+                        ctx += f"  Activity (30d): {deal_row.get('a30', 0)} | Total: {deal_row.get('total', 0)}\n"
+                        ctx += f"  Breakdown: {deal_row.get('calls', 0)} calls, {deal_row.get('mtgs', 0)} mtgs, {deal_row.get('emails', 0)} emails, {deal_row.get('tasks', 0)} tasks\n"
                         cached = deal_activity_cache.get(dn_key)
                         if cached is not None and not cached.empty:
-                            pipeline_context += "  Recent Activity:\n"
+                            ctx += "  Recent Activity:\n"
                             for _, act in cached.head(8).iterrows():
                                 dt_str = act["_dt"].strftime("%m/%d") if pd.notna(act["_dt"]) else "?"
-                                pipeline_context += f"    - {dt_str} | {act['_tp']} | {act['_owner']} | {act['_summary'][:100]}\n"
-                        pipeline_context += "\n"
+                                ctx += f"    - {dt_str} | {act['_tp']} | {act['_owner']} | {act['_summary'][:100]}\n"
+                        deal_contexts[dn_key] = ctx
+                        pipeline_context += ctx + "\n"
 
-                    # Call Claude for the full pipeline report
-                    response = client.messages.create(
+                    # 1) Get executive summary for the whole pipeline
+                    summary_resp = client.messages.create(
                         model="claude-sonnet-4-20250514",
-                        max_tokens=2000,
-                        system="""You are a sharp, friendly sales ops analyst at Calyx Containers writing a weekly pipeline health email to a sales rep. You write in a direct, supportive tone — like a coach who's reviewed the game tape.
+                        max_tokens=600,
+                        system="""You are a sharp, warm sales ops coach at Calyx Containers (cannabis packaging). Write a 3-4 sentence executive summary of this rep's pipeline health. Be specific about which deals look good, which need work, and one overarching pattern. Reference specific deal names. Keep it conversational and motivating. No markdown formatting — just clean prose.""",
+                        messages=[{"role": "user", "content": pipeline_context}]
+                    )
+                    ai_summary = summary_resp.content[0].text
 
-Structure your report as:
+                    # 2) Get per-deal analyses in batch
+                    deals_prompt = f"TODAY'S DATE: {date.today().strftime('%Y-%m-%d')} ({date.today().strftime('%A')})\n\n"
+                    deals_prompt += "For EACH deal below, write a 2-sentence analysis: (1) what's happening and (2) one specific action for this week. Be concise and tactical.\n\n"
+                    deals_prompt += "Format your response as:\nDEAL: [exact deal name]\nANALYSIS: [your 2 sentences]\n\n"
+                    deals_prompt += "Here are the deals:\n\n"
+                    for dn_key, ctx in deal_contexts.items():
+                        deals_prompt += ctx + "\n---\n"
 
-1. **Pipeline Snapshot** (2-3 sentences): Overall health of their pipeline — what's looking good, what needs attention.
+                    deals_resp = client.messages.create(
+                        model="claude-sonnet-4-20250514",
+                        max_tokens=2500,
+                        system="""You are a sharp sales ops analyst at Calyx Containers. For each deal, write exactly 2 sentences: what's happening and one creative action for this week. Be specific about dates. No breakup emails or ultimatums — keep it warm and tactical. No markdown — plain text only.
 
-2. **Deals That Need Action This Week** (bullet each deal that's stale/inactive/at risk):
-   - Deal name + company
-   - What's happening (or not happening)
-   - ONE specific, creative action to take this week
-
-3. **Deals in Good Shape** (brief list): Quick acknowledgment of deals with healthy engagement — keep doing what you're doing.
-
-4. **Big Picture** (1-2 sentences): Any patterns you see across the pipeline — too many deals in one stage, not enough meetings, etc.
-
-Keep it under 500 words. Be specific about dates and timeframes. Do NOT recommend breakup emails or ultimatums. Keep the tone warm, tactical, and actionable. Use plain text formatting (no markdown bold/italic since this goes in an email).""",
-                        messages=[{"role": "user", "content": f"Write the weekly pipeline health report for this rep:\n\n{pipeline_context}"}]
+Format each as:
+DEAL: [exact deal name from the data]
+ANALYSIS: [2 sentences]""",
+                        messages=[{"role": "user", "content": deals_prompt}]
                     )
 
-                    report_text = response.content[0].text
-                    report_results[rep] = report_text
+                    # Parse deal analyses
+                    ai_deal_analyses = {}
+                    raw_analyses = deals_resp.content[0].text
+                    current_deal = None
+                    current_analysis = []
+                    for line in raw_analyses.split("\n"):
+                        line_s = line.strip()
+                        if line_s.upper().startswith("DEAL:"):
+                            if current_deal and current_analysis:
+                                ai_deal_analyses[current_deal] = " ".join(current_analysis).strip()
+                            deal_name_raw = line_s[5:].strip()
+                            current_deal = deal_name_raw.lower().strip()
+                            current_analysis = []
+                        elif line_s.upper().startswith("ANALYSIS:"):
+                            current_analysis.append(line_s[9:].strip())
+                        elif line_s and current_deal:
+                            current_analysis.append(line_s)
+                    if current_deal and current_analysis:
+                        ai_deal_analyses[current_deal] = " ".join(current_analysis).strip()
+
+                    report_results[rep] = (ai_summary, ai_deal_analyses, rd)
 
                 # Send emails
-                progress_bar.progress(0.9, text="Sending emails...")
+                progress_bar.progress(0.85, text="Building beautiful emails...")
                 emails_sent = 0
                 email_errors = []
+                html_previews = {}
 
-                if smtp_user and smtp_pass:
+                for rep, (ai_summary, ai_deal_analyses, rd) in report_results.items():
+                    if rep not in REP_EMAILS:
+                        continue
+                    rep_first = rep.split()[0]
+
+                    if rd.empty:
+                        continue
+
+                    html_body = build_html_email(rep, rep_first, rd, ai_summary, ai_deal_analyses)
+                    html_previews[rep] = html_body
+
+                    if smtp_user and smtp_pass:
+                        try:
+                            msg = MIMEMultipart("alternative")
+                            msg["Subject"] = f"📊 Your Pipeline Intelligence Report — {date.today().strftime('%b %d')}"
+                            msg["From"] = smtp_from
+                            msg["To"] = REP_EMAILS[rep]
+                            msg["Cc"] = ", ".join(CC_EMAILS)
+
+                            # Plain text fallback
+                            plain = f"Hi {rep_first},\n\nYour pipeline health report is ready.\n\n"
+                            plain += f"Pipeline Summary:\n{ai_summary}\n\n"
+                            plain += f"View the full HTML version in your email client.\n\n"
+                            plain += "— Calyx Activity Hub AI\n"
+
+                            msg.attach(MIMEText(plain, "plain"))
+                            msg.attach(MIMEText(html_body, "html"))
+
+                            if "smtp_server" not in st.session_state:
+                                server = smtplib.SMTP(smtp_host, smtp_port)
+                                server.starttls()
+                                server.login(smtp_user, smtp_pass)
+                                st.session_state["smtp_server"] = server
+
+                            recipients = [REP_EMAILS[rep]] + CC_EMAILS
+                            st.session_state["smtp_server"].sendmail(smtp_from, recipients, msg.as_string())
+                            emails_sent += 1
+                        except Exception as e:
+                            email_errors.append(f"{rep}: {e}")
+                            # Reset server on error
+                            st.session_state.pop("smtp_server", None)
+
+                # Cleanup SMTP
+                if "smtp_server" in st.session_state:
                     try:
-                        server = smtplib.SMTP(smtp_host, smtp_port)
-                        server.starttls()
-                        server.login(smtp_user, smtp_pass)
+                        st.session_state["smtp_server"].quit()
+                    except:
+                        pass
+                    st.session_state.pop("smtp_server", None)
 
-                        for rep, report_text in report_results.items():
-                            if rep not in REP_EMAILS:
-                                continue
-                            try:
-                                msg = MIMEMultipart("alternative")
-                                msg["Subject"] = f"📊 Weekly Pipeline Health Report — {rep} ({date.today().strftime('%b %d, %Y')})"
-                                msg["From"] = smtp_from
-                                msg["To"] = REP_EMAILS[rep]
-                                msg["Cc"] = ", ".join(CC_EMAILS)
-
-                                # Plain text body
-                                body = f"Hi {rep.split()[0]},\n\nHere's your weekly pipeline health report from Calyx Activity Hub.\n\n"
-                                body += "=" * 50 + "\n\n"
-                                body += report_text
-                                body += "\n\n" + "=" * 50 + "\n"
-                                body += "\nThis report was generated by Calyx Activity Hub AI.\n"
-                                body += "Questions? Reach out to Xander or Kyle.\n"
-
-                                msg.attach(MIMEText(body, "plain"))
-
-                                recipients = [REP_EMAILS[rep]] + CC_EMAILS
-                                server.sendmail(smtp_from, recipients, msg.as_string())
-                                emails_sent += 1
-                            except Exception as e:
-                                email_errors.append(f"{rep}: {e}")
-
-                        server.quit()
-                    except Exception as e:
-                        email_errors.append(f"SMTP connection: {e}")
-
-                progress_bar.progress(1.0, text="Done!")
+                progress_bar.progress(1.0, text="✅ Done!")
 
                 # Show results
                 if emails_sent > 0:
-                    st.success(f"✅ Sent {emails_sent} pipeline reports via email!")
+                    st.success(f"✅ Sent {emails_sent} pipeline reports!")
                 elif not smtp_user:
-                    st.info("📋 Reports generated below (configure SMTP_USER, SMTP_PASS, SMTP_HOST in secrets to enable email sending)")
+                    st.info("📋 Reports generated below — add SMTP_USER, SMTP_PASS, SMTP_HOST to secrets to enable email.")
                 if email_errors:
                     for err in email_errors:
                         st.warning(f"⚠️ {err}")
 
-                # Always display the reports in the UI too
-                for rep, report_text in report_results.items():
-                    with st.expander(f"📧 {rep}'s Pipeline Report", expanded=False):
-                        st.markdown(report_text)
+                # Show HTML previews in-app
+                for rep, html_body in html_previews.items():
+                    with st.expander(f"📧 {rep}'s Report Preview", expanded=False):
+                        ai_summary = report_results[rep][0]
+                        st.markdown(f"**AI Summary:** {ai_summary}")
+                        st.markdown("---")
+                        st.components.v1.html(html_body, height=800, scrolling=True)
 
             except Exception as e:
                 st.error(f"Report generation failed: {e}")
