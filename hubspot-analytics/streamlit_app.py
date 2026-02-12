@@ -2206,7 +2206,7 @@ For Owen Labombard (SDR — newer, needs confidence):
         }
 
         section_header("👔", "Sales Leadership Playbook", C["score"])
-        st.markdown("Generate the unified pipeline playbook for the leadership team — the step-by-step answer to *\"we're off goal, now what?\"* Pairs with the CRO Scorecard. One report, sent to Xander, Kyle, and Alex.", unsafe_allow_html=True)
+        st.markdown("Generate the unified pipeline playbook for the leadership team — the step-by-step answer to *\"we're off goal, now what?\"* Pairs with the CRO Scorecard. Sent to Xander for review.", unsafe_allow_html=True)
 
         if st.button("👔  Generate & Email Leadership Playbook", key="leadership_report", type="primary"):
             try:
@@ -2508,7 +2508,7 @@ RULES:
                 progress_bar.progress(0.9, text="Sending...")
                 emails_sent = 0
                 email_errors = []
-                all_recipients = list(LEADERSHIP_EMAILS.values())
+                all_recipients = ["xward@calyxcontainers.com"]
 
                 if smtp_user and smtp_pass:
                     try:
@@ -2534,7 +2534,7 @@ RULES:
                 progress_bar.progress(1.0, text="✅ Done!")
 
                 if emails_sent > 0:
-                    st.success("✅ Pipeline Playbook sent to Kyle, Alex & Xander!")
+                    st.success("✅ Pipeline Playbook sent to Xander!")
                 elif not smtp_user:
                     st.info("📋 Playbook generated below — add SMTP credentials to enable email.")
                 if email_errors:
