@@ -1381,7 +1381,8 @@ elif st.session_state.page == "deals":
                             btn_key = f"ai_{rep}_{didx}_{dn_key[:30]}"
                             if st.button("🤖 Analyze Deal Health", key=btn_key):
                                 with st.spinner("Analyzing..."):
-                                    deal_info = f"Deal: {deal_row.get('deal_name', '')}\n"
+                                    deal_info = f"TODAY'S DATE: {date.today().strftime('%Y-%m-%d')} ({date.today().strftime('%A')})\n\n"
+                                    deal_info += f"Deal: {deal_row.get('deal_name', '')}\n"
                                     deal_info += f"Company: {deal_row.get('company_name', '')}\n"
                                     deal_info += f"Rep: {rep}\n"
                                     deal_info += f"Stage: {deal_row.get('deal_stage', '')}\n"
@@ -1413,6 +1414,8 @@ When you see patterns of failed outreach (unanswered emails, left voicemails, no
 - Sending physical samples of new products or updated packaging options
 
 Be direct, specific, and brief. No fluff. Use the activity data to identify the real pattern and prescribe the right medicine.
+
+IMPORTANT: Today's date is provided at the top of the deal info. Pay close attention to HOW RECENT each activity is — "yesterday" and "2 weeks ago" tell very different stories. Reference specific dates and timeframes in your analysis (e.g., "the meeting yesterday" not "a recent meeting").
 
 IMPORTANT: Do NOT recommend breakup emails, ultimatums, or threatening to walk away. These are real relationships — keep the tone warm and persistent. A quiet deal doesn't mean a dead deal. Focus on adding value and finding creative new angles to re-engage.""",
                                             messages=[{"role": "user", "content": f"""Analyze this deal:
