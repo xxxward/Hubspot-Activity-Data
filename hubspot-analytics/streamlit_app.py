@@ -53,7 +53,13 @@ st.markdown("""
     background: var(--bg-primary) !important;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 }
-.block-container { padding-top: 0.6rem !important; }
+.block-container { padding-top: 1.2rem !important; }
+
+/* Filter area spacing */
+.filter-spacer { margin-top: 16px; }
+.stExpander[data-testid="stExpander"] {
+    margin-top: 8px !important;
+}
 
 /* ── Sidebar ── */
 section[data-testid="stSidebar"] {
@@ -524,17 +530,20 @@ with st.sidebar:
 # ════════════════════════════════════════════════════════════════════════
 _default_start = date.today() - timedelta(days=7)
 
+st.markdown('<div class="filter-spacer"></div>', unsafe_allow_html=True)
 with st.expander("🔎 Filters", expanded=False):
     # Quick-select chips
     chip_col, _, _ = st.columns([3, 1, 1])
     with chip_col:
         quick = st.radio(
             "Quick range",
-            ["7d", "30d", "90d", "This Quarter", "This Year", "All Time", "Custom"],
-            horizontal=True, index=0, label_visibility="collapsed",
+            ["Today", "7d", "30d", "90d", "This Quarter", "This Year", "All Time", "Custom"],
+            horizontal=True, index=1, label_visibility="collapsed",
         )
     today = date.today()
-    if quick == "7d":
+    if quick == "Today":
+        start_date, end_date = today, today
+    elif quick == "7d":
         start_date, end_date = today - timedelta(days=7), today
     elif quick == "30d":
         start_date, end_date = today - timedelta(days=30), today
@@ -1300,6 +1309,171 @@ elif st.session_state.page == "deals":
             ("Needs Attention", f"{nw}", "red"),
             ("Company Match", f"{len(matched_deals)}/{len(mg)}", "cyan"),
         ])
+
+        section_divider()
+
+        # ── 📧 Email Pipeline Reports ──
+        REP_EMAILS = {
+            "Jake Lynch": "jlynch@calyxcontainers.com",
+            "Owen Labombard": "olabombard@calyxcontainers.com",
+            "Lance Mitton": "lmitton@calyxcontainers.com",
+            "Dave Borkowski": "dborkowski@calyxcontainers.com",
+            "Brad Sherman": "bsherman@calyxcontainers.com",
+        }
+        CC_EMAILS = ["xward@calyxcontainers.com", "kbissell@calyxcontainers.com"]
+
+        section_header("📧", "Pipeline Health Reports", C["emails"])
+        st.markdown("Generate AI-powered pipeline summaries and email them to each rep (CC: Xander & Kyle).", unsafe_allow_html=True)
+
+        if st.button("📧  Generate & Email Pipeline Reports", key="email_reports", type="primary"):
+            try:
+                import anthropic
+                import smtplib
+                from email.mime.text import MIMEText
+                from email.mime.multipart import MIMEMultipart
+
+                client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+
+                smtp_host = st.secrets.get("SMTP_HOST", "smtp.gmail.com")
+                smtp_port = int(st.secrets.get("SMTP_PORT", 587))
+                smtp_user = st.secrets.get("SMTP_USER", "")
+                smtp_pass = st.secrets.get("SMTP_PASS", "")
+                smtp_from = st.secrets.get("SMTP_FROM", smtp_user)
+
+                progress_bar = st.progress(0, text="Starting pipeline analysis...")
+                report_results = {}
+                reps_to_report = [r for r in selected_reps if r in REP_EMAILS]
+                total_reps = len(reps_to_report)
+
+                for rep_idx, rep in enumerate(reps_to_report):
+                    progress_bar.progress(
+                        (rep_idx) / total_reps,
+                        text=f"Analyzing {rep}'s pipeline ({rep_idx + 1}/{total_reps})..."
+                    )
+
+                    rd = mg[mg["hubspot_owner_name"] == rep] if "hubspot_owner_name" in mg.columns else pd.DataFrame()
+                    if rd.empty:
+                        report_results[rep] = "No active deals in pipeline."
+                        continue
+
+                    # Build comprehensive pipeline context for this rep
+                    pipeline_context = f"TODAY'S DATE: {date.today().strftime('%Y-%m-%d')} ({date.today().strftime('%A')})\n\n"
+                    pipeline_context += f"REP: {rep}\n"
+                    pipeline_context += f"TOTAL ACTIVE DEALS: {len(rd)}\n"
+                    pipeline_context += f"TOTAL PIPELINE VALUE: ${rd['amount'].sum():,.0f}\n" if "amount" in rd.columns else ""
+                    n_active = len(rd[rd["health"] == "Active"])
+                    n_attention = len(rd) - n_active
+                    pipeline_context += f"DEALS ACTIVE (7d): {n_active} | NEEDS ATTENTION: {n_attention}\n\n"
+                    pipeline_context += "=" * 60 + "\n"
+                    pipeline_context += "DEAL-BY-DEAL BREAKDOWN:\n"
+                    pipeline_context += "=" * 60 + "\n\n"
+
+                    for _, deal_row in rd.iterrows():
+                        dn_key = str(deal_row.get("deal_name", "")).strip().lower()
+                        pipeline_context += f"--- {deal_row.get('deal_name', 'Unknown')} ---\n"
+                        pipeline_context += f"  Company: {deal_row.get('company_name', '')}\n"
+                        pipeline_context += f"  Stage: {deal_row.get('deal_stage', '')}\n"
+                        pipeline_context += f"  Forecast: {deal_row.get('forecast_category', '')}\n"
+                        pipeline_context += f"  Amount: ${deal_row.get('amount', 0):,.0f}\n"
+                        pipeline_context += f"  Close Date: {deal_row.get('close_date', '')}\n"
+                        pipeline_context += f"  Health: {deal_row.get('health', '')} | Days Idle: {deal_row.get('days_idle', 'N/A')}\n"
+                        pipeline_context += f"  Activity (30d): {deal_row.get('a30', 0)} | Total: {deal_row.get('total', 0)}\n"
+                        pipeline_context += f"  Breakdown: {deal_row.get('calls', 0)} calls, {deal_row.get('mtgs', 0)} mtgs, {deal_row.get('emails', 0)} emails, {deal_row.get('tasks', 0)} tasks\n"
+
+                        # Add recent activity timeline if available
+                        cached = deal_activity_cache.get(dn_key)
+                        if cached is not None and not cached.empty:
+                            pipeline_context += "  Recent Activity:\n"
+                            for _, act in cached.head(8).iterrows():
+                                dt_str = act["_dt"].strftime("%m/%d") if pd.notna(act["_dt"]) else "?"
+                                pipeline_context += f"    - {dt_str} | {act['_tp']} | {act['_owner']} | {act['_summary'][:100]}\n"
+                        pipeline_context += "\n"
+
+                    # Call Claude for the full pipeline report
+                    response = client.messages.create(
+                        model="claude-sonnet-4-20250514",
+                        max_tokens=2000,
+                        system="""You are a sharp, friendly sales ops analyst at Calyx Containers writing a weekly pipeline health email to a sales rep. You write in a direct, supportive tone — like a coach who's reviewed the game tape.
+
+Structure your report as:
+
+1. **Pipeline Snapshot** (2-3 sentences): Overall health of their pipeline — what's looking good, what needs attention.
+
+2. **Deals That Need Action This Week** (bullet each deal that's stale/inactive/at risk):
+   - Deal name + company
+   - What's happening (or not happening)
+   - ONE specific, creative action to take this week
+
+3. **Deals in Good Shape** (brief list): Quick acknowledgment of deals with healthy engagement — keep doing what you're doing.
+
+4. **Big Picture** (1-2 sentences): Any patterns you see across the pipeline — too many deals in one stage, not enough meetings, etc.
+
+Keep it under 500 words. Be specific about dates and timeframes. Do NOT recommend breakup emails or ultimatums. Keep the tone warm, tactical, and actionable. Use plain text formatting (no markdown bold/italic since this goes in an email).""",
+                        messages=[{"role": "user", "content": f"Write the weekly pipeline health report for this rep:\n\n{pipeline_context}"}]
+                    )
+
+                    report_text = response.content[0].text
+                    report_results[rep] = report_text
+
+                # Send emails
+                progress_bar.progress(0.9, text="Sending emails...")
+                emails_sent = 0
+                email_errors = []
+
+                if smtp_user and smtp_pass:
+                    try:
+                        server = smtplib.SMTP(smtp_host, smtp_port)
+                        server.starttls()
+                        server.login(smtp_user, smtp_pass)
+
+                        for rep, report_text in report_results.items():
+                            if rep not in REP_EMAILS:
+                                continue
+                            try:
+                                msg = MIMEMultipart("alternative")
+                                msg["Subject"] = f"📊 Weekly Pipeline Health Report — {rep} ({date.today().strftime('%b %d, %Y')})"
+                                msg["From"] = smtp_from
+                                msg["To"] = REP_EMAILS[rep]
+                                msg["Cc"] = ", ".join(CC_EMAILS)
+
+                                # Plain text body
+                                body = f"Hi {rep.split()[0]},\n\nHere's your weekly pipeline health report from Calyx Activity Hub.\n\n"
+                                body += "=" * 50 + "\n\n"
+                                body += report_text
+                                body += "\n\n" + "=" * 50 + "\n"
+                                body += "\nThis report was generated by Calyx Activity Hub AI.\n"
+                                body += "Questions? Reach out to Xander or Kyle.\n"
+
+                                msg.attach(MIMEText(body, "plain"))
+
+                                recipients = [REP_EMAILS[rep]] + CC_EMAILS
+                                server.sendmail(smtp_from, recipients, msg.as_string())
+                                emails_sent += 1
+                            except Exception as e:
+                                email_errors.append(f"{rep}: {e}")
+
+                        server.quit()
+                    except Exception as e:
+                        email_errors.append(f"SMTP connection: {e}")
+
+                progress_bar.progress(1.0, text="Done!")
+
+                # Show results
+                if emails_sent > 0:
+                    st.success(f"✅ Sent {emails_sent} pipeline reports via email!")
+                elif not smtp_user:
+                    st.info("📋 Reports generated below (configure SMTP_USER, SMTP_PASS, SMTP_HOST in secrets to enable email sending)")
+                if email_errors:
+                    for err in email_errors:
+                        st.warning(f"⚠️ {err}")
+
+                # Always display the reports in the UI too
+                for rep, report_text in report_results.items():
+                    with st.expander(f"📧 {rep}'s Pipeline Report", expanded=False):
+                        st.markdown(report_text)
+
+            except Exception as e:
+                st.error(f"Report generation failed: {e}")
 
         section_divider()
 
