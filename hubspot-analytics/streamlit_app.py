@@ -493,6 +493,7 @@ NAV_SECTIONS = [
     ("calls",   "📞", "Calls"),
     ("meetings","📅", "Meetings"),
     ("tasks",   "✅", "Tasks"),
+    ("notes",   "📝", "Notes"),
     ("tickets", "🎫", "Tickets"),
     ("deals",   "🏥", "Deal Health"),
 ]
@@ -503,6 +504,7 @@ _counts = {
     "calls": len(data.calls) if not data.calls.empty else 0,
     "meetings": len(data.meetings) if not data.meetings.empty else 0,
     "tasks": len(data.tasks) if not data.tasks.empty else 0,
+    "notes": len(data.notes) if not data.notes.empty else 0,
     "tickets": len(data.tickets) if not data.tickets.empty else 0,
     "deals": len(data.deals) if not data.deals.empty else 0,
 }
@@ -965,6 +967,7 @@ if st.session_state.page == "command":
         ("Calls", f"{len(fc):,}", "blue"),
         ("Emails", f"{len(fe):,}", "purple"),
         ("Tasks", f"{len(ft):,}", "amber"),
+        ("Notes", f"{len(fn):,}", "violet"),
         ("Tickets", f"{len(fk):,}", "red"),
     ])
 
@@ -1440,6 +1443,68 @@ elif st.session_state.page == "tickets":
                                  "ticket_status", "pipeline", "deal_name", "ticket_category") if c in fk.columns]
         if tkt_cols:
             st.dataframe(_display_df(_safe_sort(fk[tkt_cols].copy(), tkt_cols[0])),
+                         use_container_width=True, hide_index=True)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# PAGE: 📝 NOTES
+# ════════════════════════════════════════════════════════════════════════
+elif st.session_state.page == "notes":
+
+    st.markdown("""<div class="page-header">
+        <h1>📝 Notes</h1>
+        <p class="page-sub">The paper trail that keeps deals moving.</p>
+    </div>""", unsafe_allow_html=True)
+
+    if fn.empty:
+        empty_state("No notes in this range. Time to document! 📝")
+    else:
+        n_notes = len(fn)
+        n_reps_noting = fn["hubspot_owner_name"].nunique() if "hubspot_owner_name" in fn.columns else 0
+        n_companies = fn["company_name"].nunique() if "company_name" in fn.columns else 0
+        n_deal_linked = len(fn[fn["deal_name"].astype(str).str.strip() != ""]) if "deal_name" in fn.columns else 0
+
+        kpi([
+            ("Total Notes", f"{n_notes:,}", "violet"),
+            ("Reps Active", f"{n_reps_noting}", "blue"),
+            ("Companies", f"{n_companies:,}", "pink"),
+            ("Deal-Linked", f"{n_deal_linked:,}", "green"),
+        ])
+
+        section_divider()
+
+        ch1, ch2 = st.columns(2)
+        with ch1:
+            section_header("👤", "Notes by Rep", C["notes"])
+            if "hubspot_owner_name" in fn.columns:
+                nr = fn["hubspot_owner_name"].value_counts().reset_index()
+                nr.columns = ["Rep", "Count"]
+                fig = px.bar(nr, x="Rep", y="Count", color_discrete_sequence=[C["notes"]])
+                fig.update_layout(xaxis_title="", yaxis_title="")
+                st.plotly_chart(styled_fig(fig, 280), use_container_width=True)
+
+        with ch2:
+            section_header("🏢", "Top Companies by Notes", C["notes"])
+            if "company_name" in fn.columns:
+                nc = fn["company_name"].value_counts().head(10).reset_index()
+                nc.columns = ["Company", "Count"]
+                fig = px.bar(nc, y="Company", x="Count", orientation="h",
+                             color_discrete_sequence=[C["score"]])
+                fig.update_layout(xaxis_title="", yaxis_title="")
+                st.plotly_chart(styled_fig(fig, 280), use_container_width=True)
+
+        section_divider()
+
+        # Detail table
+        section_header("📋", "All Notes", C["notes"])
+        note_cols = [c for c in ("activity_date", "hubspot_owner_name", "company_name",
+                                  "deal_name", "note_body") if c in fn.columns]
+        if note_cols:
+            fn_display = fn[note_cols].copy()
+            # Truncate note body for display
+            if "note_body" in fn_display.columns:
+                fn_display["note_body"] = fn_display["note_body"].astype(str).str.replace(r'<[^>]+>', '', regex=True).str[:200]
+            st.dataframe(_display_df(_safe_sort(fn_display, note_cols[0])),
                          use_container_width=True, hide_index=True)
 
 
