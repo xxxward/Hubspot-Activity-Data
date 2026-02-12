@@ -453,6 +453,8 @@ def get_data():
 
 try:
     data = AnalyticsData(**get_data())
+    if "last_refresh" not in st.session_state:
+        st.session_state["last_refresh"] = datetime.now()
 except Exception as e:
     st.error(f"**Data load failed:** {e}")
     st.stop()
@@ -500,11 +502,18 @@ with st.sidebar:
             st.session_state.page = key
             st.rerun()
 
-    # Footer
+    # Refresh button
     st.markdown("---")
-    now_str = datetime.now().strftime("%b %d, %I:%M %p")
+    if st.button("🔄  Refresh Data", key="refresh_data", use_container_width=True):
+        get_data.clear()
+        st.session_state["last_refresh"] = datetime.now()
+        st.rerun()
+
+    # Footer
+    last_refresh = st.session_state.get("last_refresh", datetime.now())
+    refresh_str = last_refresh.strftime("%b %d, %I:%M %p")
     st.markdown(f"""<div class="sidebar-footer">
-        ⏱ Last refreshed: {now_str}<br>
+        ⏱ Last refreshed: {refresh_str}<br>
         {len(data.deals)} deals · {len(data.calls)} calls · {len(data.meetings)} mtgs<br>
         {len(data.emails)} emails · {len(data.tasks)} tasks · {len(data.tickets)} tickets
     </div>""", unsafe_allow_html=True)
