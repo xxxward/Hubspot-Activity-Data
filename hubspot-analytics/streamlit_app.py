@@ -9,6 +9,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import date, timedelta, datetime
+from zoneinfo import ZoneInfo
 from src.utils.logging import setup_logging
 from src.parsing.filters import REPS_IN_SCOPE, PIPELINES_IN_SCOPE
 from src.metrics.scoring import WEIGHTS
@@ -448,6 +449,22 @@ ACCENT = {
     "tasks": "amber", "tickets": "red", "notes": "violet",
 }
 
+# ── Timezone ───────────────────────────────────────────────────────────
+LOCAL_TZ = ZoneInfo("America/Denver")  # Mountain Time
+
+def _localize_dt_col(series):
+    """Convert a datetime Series from UTC to Mountain Time."""
+    dt = pd.to_datetime(series, errors="coerce")
+    if dt.empty:
+        return dt
+    # If already tz-aware, convert; if naive, assume UTC then convert
+    try:
+        if dt.dt.tz is None:
+            dt = dt.dt.tz_localize("UTC")
+        return dt.dt.tz_convert(LOCAL_TZ)
+    except Exception:
+        return dt
+
 
 # ════════════════════════════════════════════════════════════════════════
 # DATA LOADING
@@ -591,28 +608,35 @@ def _fdate_raw(df, date_col="activity_date"):
     if df.empty: return df
     for col in (date_col, "activity_date", "meeting_start_time", "created_date"):
         if col in df.columns:
-            dt = pd.to_datetime(df[col], errors="coerce")
-            mask = dt.notna() & (dt >= pd.Timestamp(start_date)) & (dt <= pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1))
+            dt = _localize_dt_col(df[col])
+            end_ts = pd.Timestamp(end_date, tz=LOCAL_TZ) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+            start_ts = pd.Timestamp(start_date, tz=LOCAL_TZ)
+            mask = dt.notna() & (dt >= start_ts) & (dt <= end_ts)
             return df[mask].copy()
     return df
 
 def _fdate(df, col="period_day"):
     if df.empty or col not in df.columns: return df
     dt = pd.to_datetime(df[col], errors="coerce")
-    return df[(dt >= pd.Timestamp(start_date)) & (dt <= pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1))].copy()
+    end_ts = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+    return df[(dt >= pd.Timestamp(start_date)) & (dt <= end_ts)].copy()
 
 def _safe_sort(df, col, asc=False):
     try: return df.sort_values(col, ascending=asc)
     except: return df
 
 def _display_df(df):
-    """Clean a DataFrame for st.dataframe — fix mixed types that break PyArrow."""
+    """Clean a DataFrame for st.dataframe — fix mixed types and localize to Mountain Time."""
     df = df.copy()
     for col in df.columns:
         if df[col].dtype == object:
             has_ts = df[col].apply(lambda x: isinstance(x, pd.Timestamp)).any()
             if has_ts:
-                df[col] = pd.to_datetime(df[col], errors="coerce").dt.strftime("%Y-%m-%d %H:%M").fillna("")
+                localized = _localize_dt_col(df[col])
+                df[col] = localized.dt.strftime("%Y-%m-%d %H:%M").fillna("")
+        elif pd.api.types.is_datetime64_any_dtype(df[col]):
+            localized = _localize_dt_col(df[col])
+            df[col] = localized.dt.strftime("%Y-%m-%d %H:%M").fillna("")
     return df
 
 def kpi(cards):
@@ -637,6 +661,15 @@ def kpi(cards):
 def hs_deal_url(did):
     if pd.isna(did) or not str(did).strip(): return ""
     return f"https://app.hubspot.com/contacts/44704741/deal/{int(float(str(did)))}"
+
+def _safe_num(val, default=0):
+    """Safely convert a value to a number, returning default if NaN/None."""
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return default
+    try:
+        return val if not pd.isna(val) else default
+    except (TypeError, ValueError):
+        return default
 
 def section_header(icon, title, accent_color=None):
     accent = f'background: {accent_color};' if accent_color else 'background: var(--violet);'
@@ -670,7 +703,10 @@ if not ft_all.empty:
         if try_col in ft_all.columns:
             candidate = pd.to_datetime(ft_all[try_col], errors="coerce")
             task_dt = task_dt.fillna(candidate)
-    ft = ft_all[task_dt.notna() & (task_dt >= pd.Timestamp(start_date)) & (task_dt <= pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1))].copy()
+    task_dt_local = _localize_dt_col(task_dt)
+    start_ts = pd.Timestamp(start_date, tz=LOCAL_TZ)
+    end_ts = pd.Timestamp(end_date, tz=LOCAL_TZ) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+    ft = ft_all[task_dt_local.notna() & (task_dt_local >= start_ts) & (task_dt_local <= end_ts)].copy()
 else:
     ft = ft_all
 
@@ -1354,13 +1390,13 @@ elif st.session_state.page == "deals":
                 dn = d.get("deal_name", "Unknown")
                 co = d.get("company_name", "")
                 stage = d.get("deal_stage", "")
-                amt = d.get("amount", 0)
+                amt = _safe_num(d.get("amount", 0))
                 health = d.get("health", "No Activity")
                 days_idle = d.get("days_idle", None)
-                a30 = d.get("a30", 0)
+                a30 = _safe_num(d.get("a30", 0))
                 hcolor = _health_color(health)
                 hlabel = _health_label(health)
-                idle_str = f"{int(days_idle)}d ago" if days_idle is not None else "—"
+                idle_str = f"{int(days_idle)}d ago" if days_idle is not None and not (isinstance(days_idle, float) and np.isnan(days_idle)) else "—"
                 forecast = d.get("forecast_category", "")
 
                 # Get AI analysis for this deal
@@ -1580,11 +1616,11 @@ elif st.session_state.page == "deals":
                         ctx += f"  Company: {deal_row.get('company_name', '')}\n"
                         ctx += f"  Stage: {deal_row.get('deal_stage', '')}\n"
                         ctx += f"  Forecast: {deal_row.get('forecast_category', '')}\n"
-                        ctx += f"  Amount: ${deal_row.get('amount', 0):,.0f}\n"
+                        ctx += f"  Amount: ${_safe_num(deal_row.get('amount', 0)):,.0f}\n"
                         ctx += f"  Close Date: {deal_row.get('close_date', '')}\n"
-                        ctx += f"  Health: {deal_row.get('health', '')} | Days Idle: {deal_row.get('days_idle', 'N/A')}\n"
-                        ctx += f"  Activity (30d): {deal_row.get('a30', 0)} | Total: {deal_row.get('total', 0)}\n"
-                        ctx += f"  Breakdown: {deal_row.get('calls', 0)} calls, {deal_row.get('mtgs', 0)} mtgs, {deal_row.get('emails', 0)} emails, {deal_row.get('tasks', 0)} tasks\n"
+                        ctx += f"  Health: {deal_row.get('health', '')} | Days Idle: {_safe_num(deal_row.get('days_idle', 0), 'N/A')}\n"
+                        ctx += f"  Activity (30d): {_safe_num(deal_row.get('a30', 0))} | Total: {_safe_num(deal_row.get('total', 0))}\n"
+                        ctx += f"  Breakdown: {_safe_num(deal_row.get('calls', 0))} calls, {_safe_num(deal_row.get('mtgs', 0))} mtgs, {_safe_num(deal_row.get('emails', 0))} emails, {_safe_num(deal_row.get('tasks', 0))} tasks\n"
                         cached = deal_activity_cache.get(dn_key)
                         if cached is not None and not cached.empty:
                             ctx += "  Recent Activity:\n"
@@ -1795,7 +1831,7 @@ ANALYSIS: [2 sentences]""",
                         with st.expander(f"📋 {deal_row.get('deal_name', 'Unknown')} — Activity Timeline"):
                             timeline = cached[["_dt", "_tp", "_owner", "_summary"]].copy()
                             timeline.columns = ["Date", "Type", "By", "Summary"]
-                            timeline["Date"] = pd.to_datetime(timeline["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
+                            timeline["Date"] = _localize_dt_col(timeline["Date"]).dt.strftime("%Y-%m-%d")
                             timeline["Summary"] = timeline["Summary"].str[:120]
                             st.dataframe(timeline, use_container_width=True, hide_index=True)
 
@@ -1808,7 +1844,7 @@ ANALYSIS: [2 sentences]""",
                                     deal_info += f"Rep: {rep}\n"
                                     deal_info += f"Stage: {deal_row.get('deal_stage', '')}\n"
                                     deal_info += f"Forecast: {deal_row.get('forecast_category', '')}\n"
-                                    deal_info += f"Amount: ${deal_row.get('amount', 0):,.0f}\n"
+                                    deal_info += f"Amount: ${_safe_num(deal_row.get('amount', 0)):,.0f}\n"
                                     deal_info += f"Close Date: {deal_row.get('close_date', '')}\n\n"
                                     deal_info += "Recent Activity (last 30 days):\n"
                                     for _, act in cached.iterrows():
