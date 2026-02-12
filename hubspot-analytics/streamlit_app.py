@@ -2138,6 +2138,420 @@ ANALYSIS: [your coaching note]""",
 
         section_divider()
 
+        # ── 📊 Sales Leadership Report ──
+        LEADERSHIP_EMAILS = {
+            "Xander Ward": "xward@calyxcontainers.com",
+            "Kyle Bissell": "kbissell@calyxcontainers.com",
+            "Alex Gonzalez": "alex@calyxcontainers.com",
+        }
+
+        LEADERSHIP_PROFILES = {
+            "Xander Ward": {
+                "role": "Rev Ops",
+                "manages": "all reps (data & systems)",
+                "voice": """You're reporting to the Rev Ops lead who built this entire analytics system. He thinks in systems, patterns, and process gaps. Give him the operational view — where are the bottlenecks, what's broken in the pipeline, which reps need support vs accountability. He wants to know what to FIX, not just what's wrong. He'll use this to guide Kyle and Alex's coaching conversations.""",
+                "coaching_guide": "",  # Xander coaches the system, not the reps directly
+            },
+            "Kyle Bissell": {
+                "role": "CRO / VP Sales",
+                "manages": "Jake Lynch and Dave Borkowski (AM/Growth team)",
+                "voice": """You're reporting to the CRO who directly manages the AM team (Jake and Dave). He cares about revenue outcomes, deal velocity, and whether his AMs are doing the right things on the right deals. Give him the revenue story — what's at risk, what's about to close, where does he need to step in personally. He's strategic and action-oriented.""",
+                "coaching_guide": """
+COACHING PLAYBOOK FOR KYLE — HOW TO GUIDE YOUR TEAM:
+
+For Jake Lynch (Senior AM — collaborative, strategic thinker):
+- Jake is a peer-level thinker. Don't tell him what to do — think WITH him.
+- In your 1:1, try: "I was looking at the [deal name] data and had a thought — what if we..."
+- Jake responds to strategic framing. Connect the dots between his deals and the bigger revenue picture.
+- If he's stuck on a deal, offer to co-strategize or make a joint call. He values partnership.
+- When Jake's deals are healthy, acknowledge it — "your engagement on [deal] is exactly the model."
+
+For Dave Borkowski (AM — needs ideas planted, not handed):
+- Dave is senior but executes best when he thinks the strategy is his own idea.
+- In your 1:1, DON'T say "you should do X." Instead try: "I noticed something interesting on [deal] — have you thought about...?"
+- Plant seeds. Let him arrive at the action. He'll execute harder when he owns it.
+- If Dave has stale deals, frame it as an observation: "What's your read on [company]? The data shows it's been quiet since [date]."
+- Avoid giving him a task list — instead ask questions that lead him to the right answers.
+""",
+            },
+            "Alex Gonzalez": {
+                "role": "CEO",
+                "manages": "Lance Mitton and Brad Sherman (Acquisition team), Owen Labombard (SDR)",
+                "voice": """You're reporting to the CEO who's spearheading the acquisition team. He wants the 30,000-foot view of the acquisition pipeline plus any deals where his personal relationships could move the needle. He also needs to know how to coach each of his direct reports effectively.""",
+                "coaching_guide": """
+COACHING PLAYBOOK FOR ALEX — HOW TO GUIDE YOUR TEAM:
+
+For Lance Mitton (Acquisition — competitive, responds to being challenged):
+- Lance wants to be pushed. He'll tune out soft feedback.
+- In your check-in, try: "Lance, the [deal] has been stale for X days — what's your plan to break through?"
+- Use competitive framing: "I've seen reps close deals like this by doing Y — think you can beat that?"
+- If Lance is crushing it, make sure he knows: "This is exactly the kind of hustle that moves the number."
+- Don't sugarcoat. He respects directness and loses respect for softness.
+
+For Brad Sherman (Acquisition — no-BS, needs efficiency):
+- Brad is a northeast, no-nonsense operator. He'll view coaching as a waste of time if it's not immediately useful.
+- Keep your feedback to ONE thing. Literally one sentence: "On [deal], try [specific action] this week."
+- Don't explain the why unless he asks. He trusts the recommendation if it's sharp.
+- In your check-in, don't do a deal-by-deal review — just flag the 1-2 deals that need his focus and move on.
+- Brad is self-sufficient. Your job is to unblock him, not manage him.
+
+For Owen Labombard (SDR — newer, needs confidence):
+- Owen is still building his sales muscles. He needs encouragement MORE than correction.
+- In your check-in, always start with what he did right: "Owen, I saw you booked X meetings this week — that's solid."
+- When coaching, frame it as growth: "One thing that could level up your game..." not "You're not doing X."
+- Celebrate his wins publicly when you can — it builds confidence fast.
+- If his numbers are low, focus on technique, not effort. He's trying hard — help him work smarter.
+""",
+            },
+        }
+
+        section_header("👔", "Sales Leadership Playbook", C["score"])
+        st.markdown("Generate the unified pipeline playbook for the leadership team — the step-by-step answer to *\"we're off goal, now what?\"* Pairs with the CRO Scorecard. One report, sent to Xander, Kyle, and Alex.", unsafe_allow_html=True)
+
+        if st.button("👔  Generate & Email Leadership Playbook", key="leadership_report", type="primary"):
+            try:
+                import anthropic
+                import smtplib
+                from email.mime.text import MIMEText
+                from email.mime.multipart import MIMEMultipart
+
+                client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+
+                smtp_host = st.secrets.get("SMTP_HOST", "smtp.gmail.com")
+                smtp_port = int(st.secrets.get("SMTP_PORT", 587))
+                smtp_user = st.secrets.get("SMTP_USER", "")
+                smtp_pass = st.secrets.get("SMTP_PASS", "")
+                smtp_from = st.secrets.get("SMTP_FROM", smtp_user)
+
+                progress_bar = st.progress(0, text="Building the playbook...")
+
+                # Build comprehensive pipeline context
+                needs_attention = mg[mg["health"].isin(["Stale", "Inactive", "No Activity"])].copy()
+                active_deals = mg[mg["health"] == "Active"].copy()
+
+                acquisition_reps = ["Lance Mitton", "Brad Sherman", "Owen Labombard"]
+                am_reps = ["Jake Lynch", "Dave Borkowski"]
+
+                def _build_team_context(team_deals, team_name):
+                    if team_deals.empty:
+                        return f"\n{team_name}: No deals needing attention.\n"
+                    ctx = f"\n{'='*60}\n{team_name}\n{'='*60}\n"
+                    ctx += f"Total deals: {len(team_deals)} | Pipeline: ${_safe_num(team_deals['amount'].sum()) if 'amount' in team_deals.columns else 0:,.0f}\n"
+                    ctx += f"Active: {len(team_deals[team_deals['health'] == 'Active'])} | Stale: {len(team_deals[team_deals['health'] == 'Stale'])} | Inactive: {len(team_deals[team_deals['health'].isin(['Inactive', 'No Activity'])])}\n\n"
+                    attention = team_deals[team_deals["health"].isin(["Stale", "Inactive", "No Activity"])]
+                    if not attention.empty:
+                        ctx += "DEALS NEEDING ATTENTION:\n"
+                        for _, d in attention.iterrows():
+                            dn_key = str(d.get("deal_name", "")).strip().lower()
+                            ctx += f"\n  {d.get('deal_name', 'Unknown')} ({d.get('company_name', '')})\n"
+                            ctx += f"    Rep: {d.get('hubspot_owner_name', '')} | Stage: {d.get('deal_stage', '')} | Amount: ${_safe_num(d.get('amount', 0)):,.0f}\n"
+                            ctx += f"    Health: {d.get('health', '')} | Days Idle: {_safe_num(d.get('days_idle', 0), 'N/A')} | Close Date: {d.get('close_date', '')}\n"
+                            ctx += f"    Activity (30d): {_safe_num(d.get('a30', 0))} | Calls: {_safe_num(d.get('calls', 0))} | Mtgs: {_safe_num(d.get('mtgs', 0))} | Emails: {_safe_num(d.get('emails', 0))}\n"
+                            cached = deal_activity_cache.get(dn_key)
+                            if cached is not None and not cached.empty:
+                                ctx += "    Recent:\n"
+                                for _, act in cached.head(5).iterrows():
+                                    dt_str = act["_dt"].strftime("%m/%d") if pd.notna(act["_dt"]) else "?"
+                                    ctx += f"      - {dt_str} | {act['_tp']} | {act['_owner']} | {act['_summary'][:80]}\n"
+                    healthy = team_deals[team_deals["health"] == "Active"]
+                    if not healthy.empty:
+                        ctx += f"\nDEALS IN GOOD SHAPE ({len(healthy)}):\n"
+                        for _, d in healthy.head(10).iterrows():
+                            ctx += f"  ✅ {d.get('deal_name', '')} ({d.get('company_name', '')}) — ${_safe_num(d.get('amount', 0)):,.0f} — {_safe_num(d.get('a30', 0))} touches in 30d\n"
+                    return ctx
+
+                acq_deals = mg[mg["hubspot_owner_name"].isin(acquisition_reps)] if "hubspot_owner_name" in mg.columns else pd.DataFrame()
+                am_deals = mg[mg["hubspot_owner_name"].isin(am_reps)] if "hubspot_owner_name" in mg.columns else pd.DataFrame()
+
+                full_context = f"TODAY'S DATE: {date.today().strftime('%Y-%m-%d')} ({date.today().strftime('%A')})\n\n"
+                full_context += f"PIPELINE OVERVIEW:\n"
+                full_context += f"Total Active Deals: {len(mg)} | Total Pipeline: ${_safe_num(mg['amount'].sum()) if 'amount' in mg.columns else 0:,.0f}\n"
+                full_context += f"Healthy: {len(active_deals)} | Needs Attention: {len(needs_attention)}\n"
+                full_context += _build_team_context(acq_deals, "ACQUISITION TEAM (Alex manages: Lance, Brad, Owen)")
+                full_context += _build_team_context(am_deals, "AM/GROWTH TEAM (Kyle manages: Jake, Dave)")
+
+                progress_bar.progress(0.2, text="Generating the playbook...")
+
+                # All coaching profiles combined for context
+                all_coaching = """
+REP COACHING PROFILES (use these to write coaching scripts):
+
+JAKE LYNCH (Senior AM — managed by Kyle):
+- Collaborative, strategic thinker. Treat him as a peer. Don't tell him what to do — think WITH him.
+- Use: "I was looking at [deal] and had a thought — what if we..."
+- He values partnership. Offer to co-strategize or make a joint call.
+
+DAVE BORKOWSKI (AM — managed by Kyle):
+- Senior but executes best when he thinks the strategy is his own idea. Use inception.
+- DON'T say "you should do X." Say: "I noticed something interesting on [deal] — have you thought about...?"
+- Frame it as an observation. Let him arrive at the action.
+
+LANCE MITTON (Acquisition — managed by Alex):
+- Competitive. Responds to being challenged. Don't sugarcoat.
+- Use: "The [deal] has been stale for X days — what's your plan to break through?"
+- Competitive framing works: "I've seen reps close deals like this by doing Y."
+
+BRAD SHERMAN (Acquisition — managed by Alex):
+- No-BS northeast personality. Views fluffy coaching as a waste of time.
+- ONE sentence per coaching point. No motivational language. Just: what to do.
+- Don't over-explain. He trusts sharp recommendations.
+
+OWEN LABOMBARD (SDR — managed by Alex):
+- Newer, still building confidence. Needs encouragement MORE than correction.
+- Always start with what he did right. Frame coaching as growth.
+- "One thing that could level up your game..." not "You're not doing X."
+"""
+
+                playbook_resp = client.messages.create(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=4000,
+                    system=f"""You are an elite sales operations intelligence system at Calyx Containers (cannabis packaging: concentrate jars, drams, tubes, boxes, flexpack, labels). You're writing THE UNIFIED PIPELINE PLAYBOOK for the entire sales leadership team.
+
+AUDIENCE: This single report goes to all three leaders:
+- Kyle Bissell (CRO/VP Sales) — manages Jake Lynch and Dave Borkowski (AM/Growth team)
+- Alex Gonzalez (CEO) — manages Lance Mitton, Brad Sherman (Acquisition), and Owen Labombard (SDR)
+- Xander Ward (Rev Ops) — built the system, manages data & process across all teams
+
+CONTEXT: This report pairs with the CRO Scorecard. When leadership looks at the scorecard and sees "we're $X off our quarterly goal," THIS playbook is the answer to "OK, now what do we do about it?" Deal by deal, rep by rep, action by action.
+
+{all_coaching}
+
+STRUCTURE (use these exact section headers):
+
+PIPELINE SNAPSHOT
+2-3 sentences. The revenue math — what's in play, what's at risk, what's the realistic close potential if the team executes. Set the stage.
+
+---
+
+DEALS THAT MOVE THE NUMBER
+The specific deals that can close the revenue gap, prioritized by dollar impact. For each:
+- Deal name + company + amount + rep
+- What the activity signals tell us (who's reaching out, who's responding, direction of engagement)
+- Close date urgency
+- WHO on leadership needs to act and WHAT they should do (Kyle make a call? Alex use a relationship? Xander fix a process?)
+
+---
+
+KYLE'S COACHING PLAYBOOK — AM/GROWTH TEAM
+For Jake and Dave specifically. For each rep:
+- What's working right now
+- The ONE coaching conversation to have this week
+- The exact words to use (matched to the rep's personality from the profiles above)
+- Example: "In your 1:1 with Dave, ask: 'What's your read on [company]? I noticed it went quiet after Feb 3.' Let him come to the action."
+
+---
+
+ALEX'S COACHING PLAYBOOK — ACQUISITION TEAM
+For Lance, Brad, and Owen specifically. Same format as Kyle's section:
+- What's working for each rep
+- The ONE coaching conversation for each
+- Exact words to use (matched to personality)
+- Where Alex's personal CEO relationships could unlock a deal
+
+---
+
+XANDER'S OPS VIEW — PROCESS & SYSTEMS
+For Xander specifically:
+- Which deals are falling through process cracks?
+- Any patterns across reps that suggest a system fix?
+- Which reps need support vs accountability?
+- One process improvement that would help the whole team
+
+---
+
+QUICK WINS
+2-3 deals closest to closing that just need a small push. The easy money this week.
+
+---
+
+THE ONE THING
+If the leadership team does ONE thing this week, what's the single highest-leverage action? Tie it to revenue.
+
+RULES:
+- Specific dates — "since Feb 3" not "recently"
+- Tie everything to revenue — this is about closing the gap
+- No breakup emails or ultimatums
+- No markdown bold/italic — use CAPS for headers and emphasis, line breaks for structure
+- Coaching scripts should feel like actual words they can use in their next 1:1
+- This is a PLAYBOOK, not a report. Every sentence should lead to an action.
+- Keep each section focused and punchy. The whole thing should take 5 minutes to read.""",
+                    messages=[{"role": "user", "content": f"Write the unified leadership pipeline playbook:\n\n{full_context}"}]
+                )
+
+                playbook_text = playbook_resp.content[0].text
+
+                progress_bar.progress(0.75, text="Building the email...")
+
+                # Build one beautiful HTML email
+                today_str = date.today().strftime("%B %d, %Y")
+                n_attention = len(needs_attention)
+                total_pipeline = _safe_num(mg['amount'].sum()) if 'amount' in mg.columns else 0
+                n_acq_att = len(acq_deals[acq_deals["health"].isin(["Stale", "Inactive", "No Activity"])]) if not acq_deals.empty else 0
+                n_am_att = len(am_deals[am_deals["health"].isin(["Stale", "Inactive", "No Activity"])]) if not am_deals.empty else 0
+
+                exec_html = f'''<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Pipeline Playbook</title></head>
+<body style="margin:0;padding:0;background:#080614;font-family:'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+<div style="display:none;max-height:0;overflow:hidden;font-size:1px;color:#080614;">
+    Leadership — your pipeline playbook is ready. {n_attention} deals need action across ${total_pipeline:,.0f} in pipeline.
+</div>
+<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#080614;padding:20px 0;">
+<tr><td align="center">
+<table width="640" cellpadding="0" cellspacing="0" border="0" style="max-width:640px;width:100%;background:#0c0a1a;border-radius:16px;overflow:hidden;border:1px solid #1e1a35;">
+
+    <!-- Header -->
+    <tr><td style="background:linear-gradient(135deg,#1a1145 0%,#251a45 50%,#1a1230 100%);padding:40px 32px 32px;">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:3px;color:#c084fc;margin-bottom:6px;">Calyx Activity Hub</div>
+        <div style="font-size:28px;font-weight:800;color:#ede9fc;line-height:1.2;">Pipeline Playbook</div>
+        <div style="font-size:13px;color:#9b93b7;margin-top:6px;">Your step-by-step plan to close the gap</div>
+        <div style="font-size:12px;color:#6a6283;margin-top:4px;">{today_str} · Prepared for Kyle, Alex & Xander</div>
+    </td></tr>
+
+    <!-- KPI strip -->
+    <tr><td style="padding:24px 32px;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+                <td width="25%" style="padding-right:4px;">
+                    <div style="background:#151228;border:1px solid #2d2750;border-radius:10px;padding:14px 8px;text-align:center;border-top:3px solid #a78bfa;">
+                        <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#9b93b7;">Pipeline</div>
+                        <div style="font-size:20px;font-weight:800;color:#a78bfa;margin-top:2px;">${total_pipeline:,.0f}</div>
+                    </div>
+                </td>
+                <td width="25%" style="padding:0 4px;">
+                    <div style="background:#151228;border:1px solid #2d2750;border-radius:10px;padding:14px 8px;text-align:center;border-top:3px solid #34d399;">
+                        <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#9b93b7;">Healthy</div>
+                        <div style="font-size:20px;font-weight:800;color:#34d399;margin-top:2px;">{len(active_deals)}</div>
+                    </div>
+                </td>
+                <td width="25%" style="padding:0 4px;">
+                    <div style="background:#151228;border:1px solid #2d2750;border-radius:10px;padding:14px 8px;text-align:center;border-top:3px solid #fb7185;">
+                        <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#9b93b7;">Need Attn</div>
+                        <div style="font-size:20px;font-weight:800;color:#fb7185;margin-top:2px;">{n_attention}</div>
+                    </div>
+                </td>
+                <td width="25%" style="padding-left:4px;">
+                    <div style="background:#151228;border:1px solid #2d2750;border-radius:10px;padding:14px 8px;text-align:center;border-top:3px solid #fbbf24;">
+                        <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#9b93b7;">Deals</div>
+                        <div style="font-size:20px;font-weight:800;color:#fbbf24;margin-top:2px;">{len(mg)}</div>
+                    </div>
+                </td>
+            </tr>
+        </table>
+    </td></tr>
+
+    <!-- Team stats -->
+    <tr><td style="padding:0 32px 20px;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+                <td width="50%" style="padding-right:6px;">
+                    <div style="background:#151228;border:1px solid #2d2750;border-radius:10px;padding:14px 16px;">
+                        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:#fbbf24;margin-bottom:6px;">🚀 Acquisition · Alex's Team</div>
+                        <div style="font-size:12px;color:#9b93b7;line-height:1.5;">
+                            {len(acq_deals)} deals · ${_safe_num(acq_deals["amount"].sum()) if "amount" in acq_deals.columns and not acq_deals.empty else 0:,.0f}<br>
+                            <span style="color:#fb7185;">{n_acq_att} need attention</span>
+                        </div>
+                    </div>
+                </td>
+                <td width="50%" style="padding-left:6px;">
+                    <div style="background:#151228;border:1px solid #2d2750;border-radius:10px;padding:14px 16px;">
+                        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:#818cf8;margin-bottom:6px;">💼 AM/Growth · Kyle's Team</div>
+                        <div style="font-size:12px;color:#9b93b7;line-height:1.5;">
+                            {len(am_deals)} deals · ${_safe_num(am_deals["amount"].sum()) if "amount" in am_deals.columns and not am_deals.empty else 0:,.0f}<br>
+                            <span style="color:#fb7185;">{n_am_att} need attention</span>
+                        </div>
+                    </div>
+                </td>
+            </tr>
+        </table>
+    </td></tr>
+
+    <!-- Divider -->
+    <tr><td style="padding:0 32px;">
+        <div style="height:1px;background:linear-gradient(90deg,transparent,#2d2750,transparent);"></div>
+    </td></tr>
+
+    <!-- Playbook content -->
+    <tr><td style="padding:24px 32px;">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:#c084fc;margin-bottom:16px;">🧠 The Playbook</div>
+        <div style="font-size:14px;color:#c4bfdb;line-height:1.8;white-space:pre-wrap;">{playbook_text}</div>
+    </td></tr>
+
+    <!-- CRO Scorecard callout -->
+    <tr><td style="padding:0 32px 24px;">
+        <div style="background:#151228;border:1px solid #2d2750;border-radius:10px;padding:16px;text-align:center;">
+            <div style="font-size:11px;color:#9b93b7;">📊 This playbook pairs with the <span style="color:#c084fc;font-weight:700;">CRO Scorecard</span> — the scorecard shows the gap, this shows how to close it.</div>
+        </div>
+    </td></tr>
+
+    <!-- Footer -->
+    <tr><td style="padding:20px 32px 28px;border-top:1px solid #1e1a35;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+                <td>
+                    <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:#818cf8;margin-bottom:4px;">Calyx Activity Hub</div>
+                    <div style="font-size:11px;color:#6a6283;">Pipeline Playbook · Pairs with CRO Scorecard · {today_str}</div>
+                </td>
+                <td style="text-align:right;vertical-align:bottom;">
+                    <div style="font-size:18px;">👔</div>
+                </td>
+            </tr>
+        </table>
+    </td></tr>
+
+</table>
+</td></tr>
+</table>
+</body></html>'''
+
+                # Send one email to all three leaders
+                progress_bar.progress(0.9, text="Sending...")
+                emails_sent = 0
+                email_errors = []
+                all_recipients = list(LEADERSHIP_EMAILS.values())
+
+                if smtp_user and smtp_pass:
+                    try:
+                        server = smtplib.SMTP(smtp_host, smtp_port)
+                        server.starttls()
+                        server.login(smtp_user, smtp_pass)
+
+                        msg = MIMEMultipart("alternative")
+                        msg["Subject"] = f"👔 Pipeline Playbook — {date.today().strftime('%b %d')} · {n_attention} deals need action"
+                        msg["From"] = smtp_from
+                        msg["To"] = ", ".join(all_recipients)
+
+                        plain = f"Team,\n\nThe weekly pipeline playbook is ready.\n\n{playbook_text}\n\n— Calyx Activity Hub AI\n"
+                        msg.attach(MIMEText(plain, "plain"))
+                        msg.attach(MIMEText(exec_html, "html"))
+
+                        server.sendmail(smtp_from, all_recipients, msg.as_string())
+                        emails_sent = 1
+                        server.quit()
+                    except Exception as e:
+                        email_errors.append(f"SMTP: {e}")
+
+                progress_bar.progress(1.0, text="✅ Done!")
+
+                if emails_sent > 0:
+                    st.success("✅ Pipeline Playbook sent to Kyle, Alex & Xander!")
+                elif not smtp_user:
+                    st.info("📋 Playbook generated below — add SMTP credentials to enable email.")
+                if email_errors:
+                    for err in email_errors:
+                        st.warning(f"⚠️ {err}")
+
+                # Show preview
+                with st.expander("👔 Pipeline Playbook Preview", expanded=True):
+                    st.markdown(playbook_text)
+                    st.markdown("---")
+                    st.components.v1.html(exec_html, height=900, scrolling=True)
+
+            except Exception as e:
+                st.error(f"Playbook generation failed: {e}")
+
+        section_divider()
+
         # Health + Flagged
         h1, h2 = st.columns([1, 2])
         with h1:
