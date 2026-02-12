@@ -336,6 +336,8 @@ details summary span { color: var(--text-primary) !important; }
 .health-badge.improving { background: rgba(52, 211, 153, 0.15); color: var(--green); }
 .health-badge.active { background: rgba(129, 140, 248, 0.15); color: var(--blue); }
 .health-badge.declining { background: rgba(251, 113, 133, 0.15); color: var(--red); }
+.health-badge.cold { background: rgba(106, 98, 131, 0.15); color: var(--text-muted); }
+.health-badge.fire { background: rgba(52, 211, 153, 0.15); color: var(--green); }
 
 /* ── Empty States ── */
 .empty-state {
@@ -714,16 +716,162 @@ total_activities = len(fm) + len(fc) + len(ft) + len(fe) + len(fn) + len(fk)
 
 
 # ════════════════════════════════════════════════════════════════════════
-# LEADERBOARD COMPUTATION (reused across pages)
+# GAMIFIED SCORING ENGINE
 # ════════════════════════════════════════════════════════════════════════
+
+# ── Role Profiles ──
+REP_ROLES = {
+    "Owen Labombard": "sdr",
+    "Lance Mitton": "acquisition",
+    "Brad Sherman": "acquisition",
+    "Jake Lynch": "am",
+    "Dave Borkowski": "am",
+    "Alex Gonzalez": "ceo",
+}
+
+ROLE_LABELS = {
+    "sdr": "🎯 SDR",
+    "acquisition": "🚀 Acquisition",
+    "am": "💼 Account Manager",
+    "ceo": "👑 CEO",
+}
+
+# ── Role-Based Activity Weights ──
+ROLE_WEIGHTS = {
+    "sdr": {
+        "meetings": 8, "calls": 1, "emails": 0.5,
+        "completed_tasks": 2, "overdue_tasks": -3, "tickets": 1, "notes": 0.5,
+    },
+    "acquisition": {
+        "meetings": 6, "calls": 3, "emails": 1,
+        "completed_tasks": 3, "overdue_tasks": -5, "tickets": 2, "notes": 1,
+    },
+    "am": {
+        "meetings": 10, "calls": 4, "emails": 1.5,
+        "completed_tasks": 3, "overdue_tasks": -5, "tickets": 3, "notes": 1.5,
+    },
+    "ceo": {
+        "meetings": 5, "calls": 2, "emails": 1,
+        "completed_tasks": 1, "overdue_tasks": -1, "tickets": 1, "notes": 0.5,
+    },
+}
+
+# ── Score Thresholds (per role) ──
+SCORE_THRESHOLDS = {
+    "sdr":         {"fire": 200, "solid": 100, "push": 50},
+    "acquisition": {"fire": 120, "solid": 60,  "push": 30},
+    "am":          {"fire": 100, "solid": 50,  "push": 25},
+    "ceo":         {"fire": 50,  "solid": 20,  "push": 10},
+}
+
+SCORE_LEVELS = {
+    "fire":  ("🔥 On Fire", "fire"),
+    "solid": ("✅ Solid", "active"),
+    "push":  ("⚡ Needs Push", "declining"),
+    "cold":  ("🧊 Cold", "cold"),
+}
+
+# ── Deal-Linked Activity Tier Multipliers ──
+# Activities tied to a company with an active deal get 1.5x
+# Activities with a company but no active deal get 1.0x
+# Activities with no company association get 0.5x
+
+def _get_active_deal_companies():
+    """Get set of company names (lowered) that have active deals."""
+    deals_all = data.deals
+    if deals_all.empty or "company_name" not in deals_all.columns:
+        return set()
+    active_mask = ~deals_all["is_terminal"] if "is_terminal" in deals_all.columns else pd.Series(True, index=deals_all.index)
+    return set(deals_all[active_mask]["company_name"].astype(str).str.strip().str.lower()) - {"", "nan"}
+
+_deal_companies = _get_active_deal_companies()
+
+def _deal_tier_multiplier(activity_df):
+    """Calculate the deal-tier weighted count for an activity DataFrame.
+    Returns a float: sum of multiplied activities."""
+    if activity_df.empty or "company_name" not in activity_df.columns:
+        return len(activity_df) * 0.5  # no company info = unlinked
+    companies = activity_df["company_name"].astype(str).str.strip().str.lower()
+    has_company = (companies != "") & (companies != "nan")
+    has_deal = companies.isin(_deal_companies)
+    # Deal-linked: 1.5x, Company but no deal: 1.0x, Unlinked: 0.5x
+    score = (has_deal * 1.5) + (has_company & ~has_deal) * 1.0 + (~has_company) * 0.5
+    return float(score.sum())
+
+def _calc_streak(rep_name):
+    """Calculate consecutive active days streak for a rep (looking backward from today)."""
+    daily = data.activity_counts_daily
+    if daily.empty or "hubspot_owner_name" not in daily.columns or "period_day" not in daily.columns:
+        return 0
+    rep_daily = daily[daily["hubspot_owner_name"] == rep_name].copy()
+    if rep_daily.empty:
+        return 0
+    rep_daily["period_day"] = pd.to_datetime(rep_daily["period_day"], errors="coerce")
+    rep_daily = rep_daily.dropna(subset=["period_day"])
+    if rep_daily.empty:
+        return 0
+    # Sum activity columns per day
+    act_cols = [c for c in ("meetings", "calls", "emails", "completed_tasks") if c in rep_daily.columns]
+    if not act_cols:
+        return 0
+    rep_daily["_total"] = rep_daily[act_cols].sum(axis=1)
+    active_days = set(rep_daily[rep_daily["_total"] > 0]["period_day"].dt.date)
+    # Count consecutive days backward from today
+    streak = 0
+    check_date = date.today()
+    while check_date in active_days:
+        streak += 1
+        check_date -= timedelta(days=1)
+    return streak
+
+def _calc_wow_growth(rep_name):
+    """Calculate week-over-week activity growth. Returns a float multiplier (e.g., 1.15 for 15% growth)."""
+    daily = data.activity_counts_daily
+    if daily.empty or "hubspot_owner_name" not in daily.columns or "period_day" not in daily.columns:
+        return 1.0
+    rep_daily = daily[daily["hubspot_owner_name"] == rep_name].copy()
+    if rep_daily.empty:
+        return 1.0
+    rep_daily["period_day"] = pd.to_datetime(rep_daily["period_day"], errors="coerce")
+    rep_daily = rep_daily.dropna(subset=["period_day"])
+    act_cols = [c for c in ("meetings", "calls", "emails", "completed_tasks") if c in rep_daily.columns]
+    if not act_cols:
+        return 1.0
+    rep_daily["_total"] = rep_daily[act_cols].sum(axis=1)
+    today_ts = pd.Timestamp(date.today())
+    this_week = rep_daily[(rep_daily["period_day"] >= today_ts - pd.Timedelta(days=7)) & (rep_daily["period_day"] <= today_ts)]
+    last_week = rep_daily[(rep_daily["period_day"] >= today_ts - pd.Timedelta(days=14)) & (rep_daily["period_day"] < today_ts - pd.Timedelta(days=7))]
+    tw_total = this_week["_total"].sum()
+    lw_total = last_week["_total"].sum()
+    if lw_total == 0:
+        return 1.15 if tw_total > 0 else 1.0  # growing from zero
+    return tw_total / lw_total
+
 def build_leaderboard():
     rows = []
     for rep in selected_reps:
-        m = len(fm[fm["hubspot_owner_name"] == rep]) if not fm.empty and "hubspot_owner_name" in fm.columns else 0
-        c = len(fc[fc["hubspot_owner_name"] == rep]) if not fc.empty and "hubspot_owner_name" in fc.columns else 0
-        e = len(fe[fe["hubspot_owner_name"] == rep]) if not fe.empty and "hubspot_owner_name" in fe.columns else 0
-        n = len(fn[fn["hubspot_owner_name"] == rep]) if not fn.empty and "hubspot_owner_name" in fn.columns else 0
-        k = len(fk[fk["hubspot_owner_name"] == rep]) if not fk.empty and "hubspot_owner_name" in fk.columns else 0
+        role = REP_ROLES.get(rep, "acquisition")
+        weights = ROLE_WEIGHTS[role]
+
+        # Get per-rep filtered DataFrames
+        rm = fm[fm["hubspot_owner_name"] == rep] if not fm.empty and "hubspot_owner_name" in fm.columns else pd.DataFrame()
+        rc = fc[fc["hubspot_owner_name"] == rep] if not fc.empty and "hubspot_owner_name" in fc.columns else pd.DataFrame()
+        re_ = fe[fe["hubspot_owner_name"] == rep] if not fe.empty and "hubspot_owner_name" in fe.columns else pd.DataFrame()
+        rn = fn[fn["hubspot_owner_name"] == rep] if not fn.empty and "hubspot_owner_name" in fn.columns else pd.DataFrame()
+        rk = fk[fk["hubspot_owner_name"] == rep] if not fk.empty and "hubspot_owner_name" in fk.columns else pd.DataFrame()
+
+        m = len(rm)
+        c = len(rc)
+        e = len(re_)
+        n = len(rn)
+        k = len(rk)
+
+        # Deal-tier weighted counts
+        m_w = _deal_tier_multiplier(rm) if not rm.empty else 0
+        c_w = _deal_tier_multiplier(rc) if not rc.empty else 0
+        e_w = _deal_tier_multiplier(re_) if not re_.empty else 0
+        n_w = _deal_tier_multiplier(rn) if not rn.empty else 0
+        k_w = _deal_tier_multiplier(rk) if not rk.empty else 0
 
         comp, over = 0, 0
         if not ft.empty and "hubspot_owner_name" in ft.columns:
@@ -737,11 +885,57 @@ def build_leaderboard():
                     past_due = due.notna() & (due < pd.Timestamp(date.today()))
                     over = int((not_done & past_due).sum())
 
-        score = m*WEIGHTS["meetings"] + c*WEIGHTS["calls"] + e*WEIGHTS["emails"] + comp*WEIGHTS["completed_tasks"] + over*WEIGHTS["overdue_tasks"]
-        rows.append({"Rep": rep, "Meetings": m, "Calls": c, "Emails": e, "Tasks": comp,
-                     "Overdue": over, "Notes": n, "Tickets": k, "Score": round(score, 1)})
+        # Base score (role-weighted × deal-tier)
+        base_score = (
+            m_w * weights["meetings"] +
+            c_w * weights["calls"] +
+            e_w * weights["emails"] +
+            comp * weights["completed_tasks"] +
+            over * weights["overdue_tasks"] +
+            k_w * weights["tickets"] +
+            n_w * weights["notes"]
+        )
 
-    return pd.DataFrame(rows).sort_values("Score", ascending=False).reset_index(drop=True)
+        # Streak bonus: +10% if 5+ consecutive active days
+        streak = _calc_streak(rep)
+        streak_bonus = 1.10 if streak >= 5 else 1.0
+
+        # Week-over-week growth bonus: +15% if this week > last week
+        wow = _calc_wow_growth(rep)
+        wow_bonus = 1.15 if wow > 1.0 else 1.0
+
+        final_score = base_score * streak_bonus * wow_bonus
+
+        # Determine level
+        thresholds = SCORE_THRESHOLDS.get(role, SCORE_THRESHOLDS["acquisition"])
+        if final_score >= thresholds["fire"]:
+            level = "fire"
+        elif final_score >= thresholds["solid"]:
+            level = "solid"
+        elif final_score >= thresholds["push"]:
+            level = "push"
+        else:
+            level = "cold"
+
+        rows.append({
+            "Rep": rep, "Role": role, "Meetings": m, "Calls": c, "Emails": e,
+            "Tasks": comp, "Overdue": over, "Notes": n, "Tickets": k,
+            "Base Score": round(base_score, 1), "Streak": streak,
+            "WoW": f"{'▲' if wow > 1 else '▼' if wow < 1 else '—'} {abs(wow - 1) * 100:.0f}%",
+            "Streak 🔥": f"{'🔥 ' if streak >= 5 else ''}{streak}d",
+            "Score": round(final_score, 1),
+            "Level": level,
+            "_wow_raw": wow,
+        })
+
+    # CEO always unranked — sort others by score, then append CEO at end
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    ceo_mask = df["Role"] == "ceo"
+    ranked = df[~ceo_mask].sort_values("Score", ascending=False).reset_index(drop=True)
+    unranked = df[ceo_mask]
+    return pd.concat([ranked, unranked], ignore_index=True)
 
 lb = build_leaderboard()
 
@@ -783,9 +977,26 @@ if st.session_state.page == "command":
         section_header("🏆", "Team Leaderboard", C["score"])
         if not lb.empty:
             lb_display = lb.copy()
+            # Rank: CEO gets 👑, others get medals/numbers
+            ranks = []
             rank_icons = {0: "🥇", 1: "🥈", 2: "🥉"}
-            lb_display.insert(0, "Rank", [rank_icons.get(i, f"#{i+1}") for i in range(len(lb_display))])
-            st.dataframe(lb_display, use_container_width=True, hide_index=True,
+            rank_num = 0
+            for _, row in lb_display.iterrows():
+                if row["Role"] == "ceo":
+                    ranks.append("👑")
+                else:
+                    ranks.append(rank_icons.get(rank_num, f"#{rank_num + 1}"))
+                    rank_num += 1
+            lb_display.insert(0, "Rank", ranks)
+            # Level badges
+            lb_display["Level "] = lb_display["Level"].map(lambda x: SCORE_LEVELS.get(x, ("", ""))[0])
+            # Role labels
+            lb_display["Role "] = lb_display["Role"].map(ROLE_LABELS)
+
+            show_cols = ["Rank", "Rep", "Role ", "Meetings", "Calls", "Emails", "Tasks",
+                         "Overdue", "Streak 🔥", "WoW", "Score", "Level "]
+            show_cols = [c for c in show_cols if c in lb_display.columns]
+            st.dataframe(lb_display[show_cols], use_container_width=True, hide_index=True,
                          column_config={
                              "Score": st.column_config.NumberColumn("Score", format="%.1f"),
                              "Overdue": st.column_config.NumberColumn("Overdue ⚠️"),
@@ -845,32 +1056,69 @@ if st.session_state.page == "command":
     section_header("👥", "Rep Spotlight", C["meetings"])
 
     if not lb.empty:
-        rep_colors = ["#f472b6", "#818cf8", "#c084fc", "#fbbf24", "#67e8f9", "#a78bfa"]
+        rep_colors = {"sdr": "#67e8f9", "acquisition": "#fbbf24", "am": "#818cf8", "ceo": "#c084fc"}
         cols = st.columns(min(3, len(lb)))
         for i, (_, r) in enumerate(lb.iterrows()):
             rep = r["Rep"]
+            role = r["Role"]
             initials = "".join([w[0] for w in rep.split()[:2]]).upper()
-            color = rep_colors[i % len(rep_colors)]
+            color = rep_colors.get(role, "#a78bfa")
             total_rep = r["Meetings"] + r["Calls"] + r["Emails"] + r["Tasks"] + r["Notes"] + r["Tickets"]
+            level_text, level_cls = SCORE_LEVELS.get(r["Level"], ("", ""))
+            role_label = ROLE_LABELS.get(role, "")
+            streak = r.get("Streak", 0)
+            wow_raw = r.get("_wow_raw", 1.0)
 
-            # Simple trend indicator
-            if r["Score"] > 30:
-                health_cls, health_text = "improving", "🔥 Hot"
-            elif r["Score"] > 15:
-                health_cls, health_text = "active", "✅ Active"
-            else:
-                health_cls, health_text = "declining", "⚡ Needs Push"
+            # Streak flame indicator
+            streak_html = ""
+            if streak >= 5:
+                streak_html = f'<span style="font-size:0.68rem;color:#fbbf24;margin-left:6px;">🔥 {streak}d streak!</span>'
+            elif streak >= 3:
+                streak_html = f'<span style="font-size:0.68rem;color:#9b93b7;margin-left:6px;">⚡ {streak}d streak</span>'
+
+            # WoW indicator
+            wow_html = ""
+            if wow_raw > 1.0:
+                wow_pct = (wow_raw - 1) * 100
+                wow_html = f'<span style="font-size:0.68rem;color:#34d399;margin-left:6px;">▲ {wow_pct:.0f}% vs last week</span>'
+            elif wow_raw < 1.0:
+                wow_pct = (1 - wow_raw) * 100
+                wow_html = f'<span style="font-size:0.68rem;color:#fb7185;margin-left:6px;">▼ {wow_pct:.0f}% vs last week</span>'
+
+            # CEO gets special treatment
+            if role == "ceo":
+                level_cls = "active"
+                level_text = "👑 CEO"
+
+            # Score bar fill (percentage of fire threshold)
+            thresholds = SCORE_THRESHOLDS.get(role, SCORE_THRESHOLDS["acquisition"])
+            fill_pct = min(100, (r["Score"] / max(thresholds["fire"], 1)) * 100)
+            bar_color = {"fire": "#34d399", "solid": "#818cf8", "push": "#fbbf24", "cold": "#fb7185"}.get(r["Level"], "#6a6283")
 
             with cols[i % len(cols)]:
                 st.markdown(f"""<div class="rep-card">
-                    <div class="rep-avatar" style="background:{color};">{initials}</div>
-                    <div class="rep-name">{rep}</div>
+                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+                        <div class="rep-avatar" style="background:{color};">{initials}</div>
+                        <div>
+                            <div class="rep-name" style="margin-bottom:0;">{rep}</div>
+                            <div style="font-size:0.65rem;color:#6a6283;font-weight:600;text-transform:uppercase;letter-spacing:1px;">{role_label}</div>
+                        </div>
+                    </div>
                     <div class="rep-stats">
                         {r['Meetings']} mtgs · {r['Calls']} calls · {r['Emails']} emails<br>
                         {r['Tasks']} tasks · {r['Overdue']} overdue · {total_rep} total
                     </div>
-                    <div class="rep-score">{r['Score']}</div>
-                    <div class="health-badge {health_cls}">{health_text}</div>
+                    <div style="display:flex;align-items:baseline;gap:8px;margin-top:10px;">
+                        <div class="rep-score">{r['Score']}</div>
+                        <span style="font-size:0.72rem;color:#6a6283;">pts</span>
+                    </div>
+                    <div style="background:#0c0a1a;border-radius:4px;height:6px;margin:8px 0;overflow:hidden;">
+                        <div style="background:{bar_color};height:100%;width:{fill_pct}%;border-radius:4px;transition:width 0.3s ease;"></div>
+                    </div>
+                    <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">
+                        <div class="health-badge {level_cls}">{level_text}</div>
+                        {streak_html}{wow_html}
+                    </div>
                 </div>""", unsafe_allow_html=True)
                 st.markdown("")  # spacer
 
