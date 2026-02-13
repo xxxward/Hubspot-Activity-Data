@@ -819,6 +819,27 @@ def _get_role_context(rep_name):
     }
     return role_contexts.get(role, "")
 
+def _ai_call(client, model, max_tokens, system, messages, retries=3):
+    """Make an AI API call with retry on rate limit errors."""
+    import time
+    for attempt in range(retries):
+        try:
+            return client.messages.create(
+                model=model, max_tokens=max_tokens,
+                system=system, messages=messages
+            )
+        except Exception as e:
+            if "rate_limit" in str(e).lower() and attempt < retries - 1:
+                wait = 30 * (attempt + 1)
+                st.toast(f"⏳ Rate limit hit — waiting {wait}s... (attempt {attempt + 2}/{retries})")
+                time.sleep(wait)
+            else:
+                raise
+
+# Model selection: use Haiku for large reports to stay within rate limits
+AI_MODEL_FAST = "claude-haiku-4-5-20251001"   # For heavy multi-deal reports
+AI_MODEL_SMART = "claude-sonnet-4-20250514"    # For single-deal coaching
+
 # ── Role-Based Activity Weights ──
 ROLE_WEIGHTS = {
     "sdr": {
@@ -2088,8 +2109,8 @@ elif st.session_state.page == "deals":
                     coaching_voice = _get_coaching_profile(rep)
                     role_context = _get_role_context(rep)
 
-                    summary_resp = client.messages.create(
-                        model="claude-sonnet-4-20250514",
+                    summary_resp = _ai_call(client,
+                        model=AI_MODEL_FAST,
                         max_tokens=600,
                         system=f"""You are a seasoned sales coach at Calyx Containers (cannabis packaging) writing a personalized pipeline overview for a specific rep. This goes in an email — it should feel like a quick coaching huddle, not a report card.
 
@@ -2110,8 +2131,8 @@ Write 3-4 sentences summarizing this rep's pipeline health. Be specific — ment
                     for dn_key, ctx in deal_contexts.items():
                         deals_prompt += ctx + "\n---\n"
 
-                    deals_resp = client.messages.create(
-                        model="claude-sonnet-4-20250514",
+                    deals_resp = _ai_call(client,
+                        model=AI_MODEL_FAST,
                         max_tokens=2500,
                         system=f"""You are a seasoned sales coach at Calyx Containers giving deal-by-deal coaching notes for a specific rep. Each note goes inside a deal card in a beautiful HTML email.
 
@@ -2401,8 +2422,8 @@ OWEN LABOMBARD (SDR — managed by Alex):
 - "One thing that could level up your game..." not "You're not doing X."
 """
 
-                playbook_resp = client.messages.create(
-                    model="claude-sonnet-4-20250514",
+                playbook_resp = _ai_call(client,
+                    model=AI_MODEL_FAST,
                     max_tokens=4000,
                     system=f"""You are an elite sales operations intelligence system at Calyx Containers (cannabis packaging: concentrate jars, drams, tubes, boxes, flexpack, labels). You're writing THE UNIFIED PIPELINE PLAYBOOK for the entire sales leadership team.
 
@@ -2844,8 +2865,8 @@ Use these EXACT delimiters. Write naturally within each section — no markdown,
                                     try:
                                         import anthropic
                                         client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
-                                        response = client.messages.create(
-                                            model="claude-sonnet-4-20250514",
+                                        response = _ai_call(client,
+                                            model=AI_MODEL_SMART,
                                             max_tokens=500,
                                             system=f"""You are a seasoned sales coach at Calyx Containers, a cannabis packaging company (concentrate jars, drams, tubes, boxes, flexpack, labels). Think of yourself as the best VP of Sales the rep has ever worked with — someone who pulls up a deal, immediately sees the story the data tells, and gives one sharp piece of coaching.
 
