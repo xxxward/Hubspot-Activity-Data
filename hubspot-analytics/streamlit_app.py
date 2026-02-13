@@ -455,15 +455,22 @@ ACCENT = {
 LOCAL_TZ = ZoneInfo("America/Denver")  # Mountain Time
 
 def _localize_dt_col(series):
-    """Convert a datetime Series from UTC to Mountain Time."""
+    """Convert a datetime Series to Mountain Time for display.
+    
+    Google Sheets data typically has naive timestamps that are already in local time.
+    We localize them as Mountain Time directly (not as UTC).
+    If they're already tz-aware, we convert.
+    """
     dt = pd.to_datetime(series, errors="coerce")
     if dt.empty:
         return dt
-    # If already tz-aware, convert; if naive, assume UTC then convert
     try:
         if dt.dt.tz is None:
-            dt = dt.dt.tz_localize("UTC")
-        return dt.dt.tz_convert(LOCAL_TZ)
+            # Naive timestamps from Google Sheets — treat as already Mountain Time
+            dt = dt.dt.tz_localize(LOCAL_TZ, ambiguous="NaT", nonexistent="NaT")
+        else:
+            dt = dt.dt.tz_convert(LOCAL_TZ)
+        return dt
     except Exception:
         return dt
 
@@ -1075,27 +1082,87 @@ if st.session_state.page == "command":
 
     section_divider()
 
-    # ── Row 3: Daily Activity Trend ──
-    section_header("📈", "Daily Activity Trend", C["calls"])
-    daily = _fdate(_frep(data.activity_counts_daily), "period_day")
-    if not daily.empty:
-        mcols = [c for c in ("meetings", "calls", "emails", "completed_tasks") if c in daily.columns]
-        if mcols and "period_day" in daily.columns:
-            trend = daily.groupby("period_day", dropna=False)[mcols].sum().reset_index()
-            trend["period_day"] = pd.to_datetime(trend["period_day"])
-            fig_trend = px.area(
-                trend.melt(id_vars="period_day", value_vars=mcols, var_name="Type", value_name="Count"),
-                x="period_day", y="Count", color="Type",
+    # ── Row 3: Activity Trend ──
+    if quick == "Today":
+        # Hourly activity breakdown for today
+        section_header("📈", "Today's Activity by Hour", C["calls"])
+
+        # Build hourly data from all filtered activity sources
+        hourly_frames = []
+        for label, df_src, dt_col in [
+            ("Meetings", fm, "meeting_start_time"),
+            ("Calls", fc, "activity_date"),
+            ("Emails", fe, "activity_date"),
+            ("Tasks", ft, "activity_date"),
+        ]:
+            if df_src.empty:
+                continue
+            for try_col in (dt_col, "activity_date", "meeting_start_time", "created_date"):
+                if try_col in df_src.columns:
+                    dts = pd.to_datetime(df_src[try_col], errors="coerce").dropna()
+                    if not dts.empty:
+                        hours = dts.dt.hour
+                        hc = hours.value_counts().reset_index()
+                        hc.columns = ["Hour", "Count"]
+                        hc["Type"] = label
+                        hourly_frames.append(hc)
+                    break
+
+        if hourly_frames:
+            hourly = pd.concat(hourly_frames, ignore_index=True)
+            # Ensure all hours 0-23 exist for smooth chart
+            all_hours = pd.DataFrame({"Hour": range(24)})
+            types = hourly["Type"].unique()
+            full_grid = pd.MultiIndex.from_product([range(24), types], names=["Hour", "Type"])
+            full_df = pd.DataFrame(index=full_grid).reset_index()
+            hourly = full_df.merge(hourly, on=["Hour", "Type"], how="left").fillna(0)
+            hourly["Count"] = hourly["Count"].astype(int)
+            # Format hour labels
+            hourly["Time"] = hourly["Hour"].apply(lambda h: f"{h % 12 or 12}{'am' if h < 12 else 'pm'}")
+
+            fig_hourly = px.bar(
+                hourly, x="Hour", y="Count", color="Type",
                 color_discrete_map={
-                    "meetings": C["meetings"], "calls": C["calls"],
-                    "emails": C["emails"], "completed_tasks": C["tasks"],
+                    "Meetings": C["meetings"], "Calls": C["calls"],
+                    "Emails": C["emails"], "Tasks": C["tasks"],
                 },
+                barmode="stack",
             )
-            fig_trend.update_traces(line_width=2, fill="tonexty", opacity=0.7)
-            fig_trend.update_layout(xaxis_title="", yaxis_title="")
-            st.plotly_chart(styled_fig(fig_trend, 300), use_container_width=True)
+            fig_hourly.update_layout(
+                xaxis=dict(
+                    tickmode="array",
+                    tickvals=list(range(0, 24, 2)),
+                    ticktext=[f"{h % 12 or 12}{'am' if h < 12 else 'pm'}" for h in range(0, 24, 2)],
+                    title="",
+                ),
+                yaxis_title="",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+            )
+            st.plotly_chart(styled_fig(fig_hourly, 300), use_container_width=True)
+        else:
+            empty_state("No activity logged yet today. Still early! ☕")
     else:
-        empty_state("No daily data for this range.")
+        # Standard daily trend
+        section_header("📈", "Daily Activity Trend", C["calls"])
+        daily = _fdate(_frep(data.activity_counts_daily), "period_day")
+        if not daily.empty:
+            mcols = [c for c in ("meetings", "calls", "emails", "completed_tasks") if c in daily.columns]
+            if mcols and "period_day" in daily.columns:
+                trend = daily.groupby("period_day", dropna=False)[mcols].sum().reset_index()
+                trend["period_day"] = pd.to_datetime(trend["period_day"])
+                fig_trend = px.area(
+                    trend.melt(id_vars="period_day", value_vars=mcols, var_name="Type", value_name="Count"),
+                    x="period_day", y="Count", color="Type",
+                    color_discrete_map={
+                        "meetings": C["meetings"], "calls": C["calls"],
+                        "emails": C["emails"], "completed_tasks": C["tasks"],
+                    },
+                )
+                fig_trend.update_traces(line_width=2, fill="tonexty", opacity=0.7)
+                fig_trend.update_layout(xaxis_title="", yaxis_title="")
+                st.plotly_chart(styled_fig(fig_trend, 300), use_container_width=True)
+        else:
+            empty_state("No daily data for this range.")
 
     section_divider()
 
@@ -2374,7 +2441,38 @@ RULES:
 - No markdown bold/italic — use CAPS for headers and emphasis, line breaks for structure
 - Coaching scripts should feel like actual words they can use in their next 1:1
 - This is a PLAYBOOK, not a report. Every sentence should lead to an action.
-- Keep each section focused and punchy. The whole thing should take 5 minutes to read.""",
+- Keep each section focused and punchy. The whole thing should take 5 minutes to read.
+
+CRITICAL FORMATTING: Wrap each section in delimiters so we can parse them:
+[PIPELINE_SNAPSHOT]
+your content here
+[/PIPELINE_SNAPSHOT]
+
+[DEALS_THAT_MOVE]
+your content here
+[/DEALS_THAT_MOVE]
+
+[KYLE_PLAYBOOK]
+your content here
+[/KYLE_PLAYBOOK]
+
+[ALEX_PLAYBOOK]
+your content here
+[/ALEX_PLAYBOOK]
+
+[XANDER_OPS]
+your content here
+[/XANDER_OPS]
+
+[QUICK_WINS]
+your content here
+[/QUICK_WINS]
+
+[ONE_THING]
+your content here
+[/ONE_THING]
+
+Use these EXACT delimiters. Write naturally within each section — no markdown, no bold, just clean prose with line breaks.""",
                     messages=[{"role": "user", "content": f"Write the unified leadership pipeline playbook:\n\n{full_context}"}]
                 )
 
@@ -2382,12 +2480,50 @@ RULES:
 
                 progress_bar.progress(0.75, text="Building the email...")
 
+                # Parse sections from AI output
+                import re
+                def _parse_section(text, tag):
+                    pattern = rf'\[{tag}\](.*?)\[/{tag}\]'
+                    match = re.search(pattern, text, re.DOTALL)
+                    return match.group(1).strip() if match else ""
+
+                sec_snapshot = _parse_section(playbook_text, "PIPELINE_SNAPSHOT")
+                sec_deals = _parse_section(playbook_text, "DEALS_THAT_MOVE")
+                sec_kyle = _parse_section(playbook_text, "KYLE_PLAYBOOK")
+                sec_alex = _parse_section(playbook_text, "ALEX_PLAYBOOK")
+                sec_xander = _parse_section(playbook_text, "XANDER_OPS")
+                sec_wins = _parse_section(playbook_text, "QUICK_WINS")
+                sec_one = _parse_section(playbook_text, "ONE_THING")
+
+                # If parsing failed, fallback to full text in snapshot
+                if not sec_snapshot and not sec_deals:
+                    sec_snapshot = playbook_text
+
                 # Build one beautiful HTML email
                 today_str = date.today().strftime("%B %d, %Y")
                 n_attention = len(needs_attention)
                 total_pipeline = _safe_num(mg['amount'].sum()) if 'amount' in mg.columns else 0
                 n_acq_att = len(acq_deals[acq_deals["health"].isin(["Stale", "Inactive", "No Activity"])]) if not acq_deals.empty else 0
                 n_am_att = len(am_deals[am_deals["health"].isin(["Stale", "Inactive", "No Activity"])]) if not am_deals.empty else 0
+
+                def _section_card(icon, title, accent_color, content):
+                    """Build a styled section card for the email."""
+                    if not content:
+                        return ""
+                    # Convert line breaks to <br> for HTML
+                    html_content = content.replace("\n", "<br>")
+                    return f'''
+    <tr><td style="padding:0 32px 16px;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-radius:12px;overflow:hidden;border:1px solid #2d2750;background:#151228;">
+            <tr><td style="height:3px;background:{accent_color};font-size:0;line-height:0;">&nbsp;</td></tr>
+            <tr><td style="padding:20px 24px 8px;">
+                <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:{accent_color};margin-bottom:4px;">{icon} {title}</div>
+            </td></tr>
+            <tr><td style="padding:0 24px 20px;">
+                <div style="font-size:13px;color:#c4bfdb;line-height:1.75;">{html_content}</div>
+            </td></tr>
+        </table>
+    </td></tr>'''
 
                 exec_html = f'''<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
@@ -2404,12 +2540,12 @@ RULES:
     <tr><td style="background:linear-gradient(135deg,#1a1145 0%,#251a45 50%,#1a1230 100%);padding:40px 32px 32px;">
         <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:3px;color:#c084fc;margin-bottom:6px;">Calyx Activity Hub</div>
         <div style="font-size:28px;font-weight:800;color:#ede9fc;line-height:1.2;">Pipeline Playbook</div>
-        <div style="font-size:13px;color:#9b93b7;margin-top:6px;">Your step-by-step plan to close the gap</div>
+        <div style="font-size:13px;color:#9b93b7;margin-top:6px;">The step-by-step plan to close the gap</div>
         <div style="font-size:12px;color:#6a6283;margin-top:4px;">{today_str} · Prepared for Kyle, Alex & Xander</div>
     </td></tr>
 
     <!-- KPI strip -->
-    <tr><td style="padding:24px 32px;">
+    <tr><td style="padding:24px 32px 16px;">
         <table width="100%" cellpadding="0" cellspacing="0" border="0">
             <tr>
                 <td width="25%" style="padding-right:4px;">
@@ -2448,7 +2584,7 @@ RULES:
                     <div style="background:#151228;border:1px solid #2d2750;border-radius:10px;padding:14px 16px;">
                         <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:#fbbf24;margin-bottom:6px;">🚀 Acquisition · Alex's Team</div>
                         <div style="font-size:12px;color:#9b93b7;line-height:1.5;">
-                            {len(acq_deals)} deals · ${_safe_num(acq_deals["amount"].sum()) if "amount" in acq_deals.columns and not acq_deals.empty else 0:,.0f}<br>
+                            {len(acq_deals)} deals · ${_safe_num(acq_deals["amount"].sum()) if "amount" in acq_deals.columns and not acq_deals.empty else 0:,.0f} ·
                             <span style="color:#fb7185;">{n_acq_att} need attention</span>
                         </div>
                     </div>
@@ -2457,7 +2593,7 @@ RULES:
                     <div style="background:#151228;border:1px solid #2d2750;border-radius:10px;padding:14px 16px;">
                         <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:#818cf8;margin-bottom:6px;">💼 AM/Growth · Kyle's Team</div>
                         <div style="font-size:12px;color:#9b93b7;line-height:1.5;">
-                            {len(am_deals)} deals · ${_safe_num(am_deals["amount"].sum()) if "amount" in am_deals.columns and not am_deals.empty else 0:,.0f}<br>
+                            {len(am_deals)} deals · ${_safe_num(am_deals["amount"].sum()) if "amount" in am_deals.columns and not am_deals.empty else 0:,.0f} ·
                             <span style="color:#fb7185;">{n_am_att} need attention</span>
                         </div>
                     </div>
@@ -2466,15 +2602,42 @@ RULES:
         </table>
     </td></tr>
 
-    <!-- Divider -->
-    <tr><td style="padding:0 32px;">
-        <div style="height:1px;background:linear-gradient(90deg,transparent,#2d2750,transparent);"></div>
+    <!-- Pipeline Snapshot -->
+    <tr><td style="padding:0 32px 16px;">
+        <div style="background:linear-gradient(135deg,#1a1530 0%,#1e1535 100%);border:1px solid #2d2750;border-radius:12px;padding:22px 24px;border-left:4px solid #a78bfa;">
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:#a78bfa;margin-bottom:10px;">📊 Pipeline Snapshot</div>
+            <div style="font-size:14px;color:#ede9fc;line-height:1.75;">{sec_snapshot.replace(chr(10), "<br>")}</div>
+        </div>
     </td></tr>
 
-    <!-- Playbook content -->
-    <tr><td style="padding:24px 32px;">
-        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:#c084fc;margin-bottom:16px;">🧠 The Playbook</div>
-        <div style="font-size:14px;color:#c4bfdb;line-height:1.8;white-space:pre-wrap;">{playbook_text}</div>
+    <!-- Deals That Move the Number -->
+    {_section_card("💰", "Deals That Move the Number", "#fbbf24", sec_deals)}
+
+    <!-- Kyle's Coaching Playbook -->
+    {_section_card("💼", "Kyle's Coaching Playbook — AM/Growth", "#818cf8", sec_kyle)}
+
+    <!-- Alex's Coaching Playbook -->
+    {_section_card("🚀", "Alex's Coaching Playbook — Acquisition", "#f472b6", sec_alex)}
+
+    <!-- Xander's Ops View -->
+    {_section_card("⚙️", "Xander's Ops View — Process & Systems", "#67e8f9", sec_xander)}
+
+    <!-- Quick Wins -->
+    <tr><td style="padding:0 32px 16px;">
+        <div style="background:#151228;border:1px solid #2d2750;border-radius:12px;padding:20px 24px;border-left:4px solid #34d399;">
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:#34d399;margin-bottom:10px;">⚡ Quick Wins</div>
+            <div style="font-size:13px;color:#c4bfdb;line-height:1.75;">{sec_wins.replace(chr(10), "<br>") if sec_wins else "No quick wins identified."}</div>
+        </div>
+    </td></tr>
+
+    <!-- The One Thing -->
+    <tr><td style="padding:0 32px 24px;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-radius:12px;overflow:hidden;border:1px solid #c084fc;background:linear-gradient(135deg,#1a1145,#251a45);">
+            <tr><td style="padding:24px;text-align:center;">
+                <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:#c084fc;margin-bottom:10px;">🎯 The One Thing This Week</div>
+                <div style="font-size:15px;color:#ede9fc;line-height:1.7;font-weight:600;">{sec_one.replace(chr(10), "<br>") if sec_one else ""}</div>
+            </td></tr>
+        </table>
     </td></tr>
 
     <!-- CRO Scorecard callout -->
