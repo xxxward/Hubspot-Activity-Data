@@ -1872,7 +1872,7 @@ elif st.session_state.page == "deals":
                 hcolor = _health_color(health)
                 hlabel = _health_label(health)
                 idle_str = f"{int(days_idle)}d ago" if days_idle is not None and not (isinstance(days_idle, float) and np.isnan(days_idle)) else "—"
-                forecast = d.get("forecast_category", "")
+                forecast = d.get("close_status", "")
 
                 # Get AI analysis for this deal
                 dn_key = str(dn).strip().lower()
@@ -2090,7 +2090,7 @@ elif st.session_state.page == "deals":
                         ctx = f"Deal: {dn}\n"
                         ctx += f"  Company: {deal_row.get('company_name', '')}\n"
                         ctx += f"  Stage: {deal_row.get('deal_stage', '')}\n"
-                        ctx += f"  Forecast: {deal_row.get('forecast_category', '')}\n"
+                        ctx += f"  Forecast: {deal_row.get('close_status', '')}\n"
                         ctx += f"  Amount: ${_safe_num(deal_row.get('amount', 0)):,.0f}\n"
                         ctx += f"  Close Date: {deal_row.get('close_date', '')}\n"
                         ctx += f"  Health: {deal_row.get('health', '')} | Days Idle: {_safe_num(deal_row.get('days_idle', 0), 'N/A')}\n"
@@ -2784,13 +2784,13 @@ Use these EXACT delimiters. Write naturally within each section — no markdown,
 
         with h2:
             section_header("🚩", "Flagged — Forecast with No Recent Activity", C["overdue"])
-            if "forecast_category" in mg.columns:
-                fl = mg[(mg["forecast_category"].isin({"Best Case", "Commit", "Expect"})) &
+            if "close_status" in mg.columns:
+                fl = mg[(mg["close_status"].isin({"Best Case", "Commit", "Expect"})) &
                         (mg["health"].isin(["Stale", "Inactive", "No Activity"]))]
             else: fl = pd.DataFrame()
             if not fl.empty:
                 sc = [c for c in ("hubspot_owner_name", "deal_name", "company_name", "deal_stage",
-                                  "forecast_category", "amount", "close_date", "health", "days_idle", "a30") if c in fl.columns]
+                                  "close_status", "amount", "close_date", "health", "days_idle", "a30") if c in fl.columns]
                 st.dataframe(_safe_sort(fl[sc], "days_idle"), use_container_width=True, hide_index=True,
                              column_config={
                                  "amount": st.column_config.NumberColumn("Amount", format="$%,.0f"),
@@ -2811,7 +2811,7 @@ Use these EXACT delimiters. Write naturally within each section — no markdown,
             nok = len(rd[rd["health"] == "Active"])
 
             with st.expander(f"**{rep}**  ·  {n_deals} deals  ·  ${v:,.0f}  ·  {nok} active  ·  {n_deals - nok} attention"):
-                sc = [c for c in ("deal_name", "company_name", "deal_stage", "forecast_category",
+                sc = [c for c in ("deal_name", "company_name", "deal_stage", "close_status",
                                   "amount", "close_date", "health", "days_idle",
                                   "rep_activity", "other_activity",
                                   "calls", "mtgs", "emails", "notes", "tickets", "tasks", "a30") if c in rd.columns]
@@ -2854,7 +2854,7 @@ Use these EXACT delimiters. Write naturally within each section — no markdown,
                                     deal_info += f"Company: {deal_row.get('company_name', '')}\n"
                                     deal_info += f"Rep: {rep}\n"
                                     deal_info += f"Stage: {deal_row.get('deal_stage', '')}\n"
-                                    deal_info += f"Forecast: {deal_row.get('forecast_category', '')}\n"
+                                    deal_info += f"Forecast: {deal_row.get('close_status', '')}\n"
                                     deal_info += f"Amount: ${_safe_num(deal_row.get('amount', 0)):,.0f}\n"
                                     deal_info += f"Close Date: {deal_row.get('close_date', '')}\n\n"
                                     deal_info += "Recent Activity (last 30 days):\n"
