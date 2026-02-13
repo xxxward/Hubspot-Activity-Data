@@ -478,35 +478,50 @@ def _detect_sequence_emails(email_df):
     # Check what the sequence ID values actually look like
     seq_values = email_df[sequence_col]
     print(f"DEBUG: Total emails: {len(email_df)}")
+    print(f"DEBUG: Data type: {seq_values.dtype}")
     print(f"DEBUG: Non-null sequence IDs: {seq_values.notna().sum()}")
     print(f"DEBUG: Null sequence IDs: {seq_values.isna().sum()}")
+    
+    # Show ALL unique values to see what we're dealing with
+    print(f"DEBUG: All unique values: {sorted(seq_values.unique(), key=lambda x: str(x))}")
     
     # Show sample values (being careful about data types)
     non_null_samples = seq_values.dropna()
     if len(non_null_samples) > 0:
-        print(f"DEBUG: Sample sequence ID values (non-null): {non_null_samples.head(5).tolist()}")
+        print(f"DEBUG: Sample sequence ID values (non-null): {non_null_samples.head(10).tolist()}")
         print(f"DEBUG: Unique non-null values count: {non_null_samples.nunique()}")
-        print(f"DEBUG: Data type: {seq_values.dtype}")
     else:
         print(f"DEBUG: No non-null sequence ID values found")
     
-    # Simple and safe logic: 
-    # - If sequence_id is not null = sequence email
-    # - If sequence_id is null = personal email
-    is_sequence_mask = seq_values.notna()
+    # Very explicit logic with debugging
+    print(f"DEBUG: Checking each condition...")
     
-    # Additional check for empty strings if it's object/string type
+    # Check for actual null values
+    is_null = seq_values.isna()
+    print(f"DEBUG: Null values: {is_null.sum()}")
+    
+    # Check for empty strings if object type
+    is_empty_string = pd.Series([False] * len(seq_values), index=seq_values.index)
     if seq_values.dtype == 'object':
-        # Convert to string safely and check for empty strings
-        seq_str = seq_values.astype(str)
-        is_not_empty = ~seq_str.isin(['', 'nan', 'None', 'null', 'NaN'])
-        is_sequence_mask = is_sequence_mask & is_not_empty
+        is_empty_string = seq_values.astype(str).str.strip().isin(['', 'nan', 'None', 'null', 'NaN'])
+        print(f"DEBUG: Empty strings: {is_empty_string.sum()}")
+    
+    # Combine conditions: sequence email = NOT null AND NOT empty string
+    is_sequence_mask = ~is_null & ~is_empty_string
+    
+    print(f"DEBUG: Final sequence mask - True count: {is_sequence_mask.sum()}")
+    print(f"DEBUG: Final sequence mask - False count: {(~is_sequence_mask).sum()}")
     
     sequence_emails = email_df[is_sequence_mask].copy()
     personal_emails = email_df[~is_sequence_mask].copy()
     
-    print(f"DEBUG: Categorized {len(sequence_emails)} as sequence emails")
-    print(f"DEBUG: Categorized {len(personal_emails)} as personal emails")
+    print(f"DEBUG: FINAL RESULT - {len(sequence_emails)} sequence emails, {len(personal_emails)} personal emails")
+    
+    # Show a few examples of what was categorized as what
+    if len(sequence_emails) > 0:
+        print(f"DEBUG: Sample sequence emails sequence_ids: {sequence_emails[sequence_col].head(3).tolist()}")
+    if len(personal_emails) > 0:
+        print(f"DEBUG: Sample personal emails sequence_ids: {personal_emails[sequence_col].head(3).tolist()}")
     
     return sequence_emails, personal_emails
 
