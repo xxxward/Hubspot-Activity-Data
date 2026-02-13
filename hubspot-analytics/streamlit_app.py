@@ -502,6 +502,7 @@ NAV_SECTIONS = [
     ("command", "🏠", "Command Center"),
     ("calls",   "📞", "Calls"),
     ("meetings","📅", "Meetings"),
+    ("emails",  "📧", "Emails"),
     ("tasks",   "✅", "Tasks"),
     ("notes",   "📝", "Notes"),
     ("tickets", "🎫", "Tickets"),
@@ -513,6 +514,7 @@ _counts = {
     "command": None,
     "calls": len(data.calls) if not data.calls.empty else 0,
     "meetings": len(data.meetings) if not data.meetings.empty else 0,
+    "emails": len(data.emails) if not data.emails.empty else 0,
     "tasks": len(data.tasks) if not data.tasks.empty else 0,
     "notes": len(data.notes) if not data.notes.empty else 0,
     "tickets": len(data.tickets) if not data.tickets.empty else 0,
@@ -1477,6 +1479,79 @@ elif st.session_state.page == "meetings":
                                  "meeting_outcome", "call_and_meeting_type", "meeting_source", "has_gong") if c in fm.columns]
         if mtg_cols:
             st.dataframe(_display_df(_safe_sort(fm[mtg_cols].copy(), mtg_cols[0])),
+                         use_container_width=True, hide_index=True)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# PAGE: 📧 EMAILS
+# ════════════════════════════════════════════════════════════════════════
+elif st.session_state.page == "emails":
+
+    st.markdown("""<div class="page-header">
+        <h1>📧 Emails</h1>
+        <p class="page-sub">Email outreach and communication tracking.</p>
+    </div>""", unsafe_allow_html=True)
+
+    if fe.empty:
+        empty_state("No emails found in this time range. 📭")
+    else:
+        # KPIs for emails
+        total_emails = len(fe)
+        unique_senders = len(fe["hubspot_owner_name"].unique()) if "hubspot_owner_name" in fe.columns else 0
+        avg_per_day = total_emails / max(1, (end_date - start_date).days + 1)
+        
+        kpi([
+            ("Total Emails", f"{total_emails:,}", "blue"),
+            ("Active Senders", f"{unique_senders}", "green"),
+            ("Daily Average", f"{avg_per_day:.1f}", "violet"),
+            ("This Week", f"{len(_fdate_raw(fe, 'activity_date'))}", "cyan"),
+        ])
+
+        # Email activity by rep
+        if "hubspot_owner_name" in fe.columns:
+            email_by_rep = fe.groupby("hubspot_owner_name").size().reset_index(name="email_count")
+            email_by_rep = email_by_rep.sort_values("email_count", ascending=False)
+            
+            if not email_by_rep.empty:
+                section_header("👤", "Emails by Rep", C["blue"])
+                
+                # Create chart
+                fig = px.bar(email_by_rep.head(10), x="hubspot_owner_name", y="email_count", 
+                           color="email_count", color_continuous_scale="Blues",
+                           title="Email Activity by Representative")
+                styled_fig(fig, 400)
+                st.plotly_chart(fig, use_container_width=True)
+
+        # Email timeline
+        if "activity_date" in fe.columns:
+            section_header("📈", "Email Timeline", C["violet"])
+            
+            fe_dated = fe.copy()
+            fe_dated["activity_date"] = pd.to_datetime(fe_dated["activity_date"], errors="coerce")
+            fe_dated = fe_dated.dropna(subset=["activity_date"])
+            
+            if not fe_dated.empty:
+                # Group by date
+                daily_emails = fe_dated.groupby(fe_dated["activity_date"].dt.date).size().reset_index(name="email_count")
+                daily_emails.columns = ["date", "email_count"]
+                
+                fig_timeline = px.line(daily_emails, x="date", y="email_count",
+                                     title="Daily Email Activity", markers=True)
+                fig_timeline.update_traces(line_color="#818cf8", marker_color="#818cf8")
+                styled_fig(fig_timeline, 400)
+                st.plotly_chart(fig_timeline, use_container_width=True)
+
+        section_divider()
+
+        # Email data table
+        section_header("📋", "Email Details", C["notes"])
+        
+        # Select relevant columns for display
+        email_cols = [c for c in ("activity_date", "hubspot_owner_name", "email_subject", "email_from_address", 
+                                "email_to_address", "company_name") if c in fe.columns]
+        
+        if email_cols:
+            st.dataframe(_display_df(_safe_sort(fe[email_cols].copy(), email_cols[0])),
                          use_container_width=True, hide_index=True)
 
 
