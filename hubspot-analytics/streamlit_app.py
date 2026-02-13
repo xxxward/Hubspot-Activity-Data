@@ -16,7 +16,7 @@ from src.metrics.scoring import WEIGHTS
 from main import load_all, AnalyticsData
 
 # Close Status options for filtering
-CLOSE_STATUS_OPTIONS = ["Best Case", "Commit", "Expect"]
+CLOSE_STATUS_OPTIONS = ["Best Case", "Expect", "Opportunity"]
 
 setup_logging()
 
@@ -1692,8 +1692,13 @@ elif st.session_state.page == "deals":
         <p class="page-sub">Pipeline pulse — who's engaged, who's going dark.</p>
     </div>""", unsafe_allow_html=True)
 
-    deals_f = _fclose_status(_frep(_fpipe(data.deals)))
-    active = deals_f[~deals_f["is_terminal"]].copy() if "is_terminal" in deals_f.columns else deals_f.copy()
+    # Apply rep and pipeline filters to all data
+    deals_base = _frep(_fpipe(data.deals))
+    active_all = deals_base[~deals_base["is_terminal"]].copy() if "is_terminal" in deals_base.columns else deals_base.copy()
+    
+    # Apply close status filter only for detailed analysis and AI
+    deals_f = _fclose_status(deals_base)
+    active_filtered = deals_f[~deals_f["is_terminal"]].copy() if "is_terminal" in deals_f.columns else deals_f.copy()
 
     # For deal health: use ALL activity (not rep-filtered)
     all_meetings = data.meetings
@@ -1766,13 +1771,13 @@ elif st.session_state.page == "deals":
         else:
             all_act = pd.DataFrame()
 
-        active["_co"] = active["company_name"].astype(str).str.strip().str.lower() if "company_name" in active.columns else ""
-        active["_dn"] = active["deal_name"].astype(str).str.strip().str.lower() if "deal_name" in active.columns else ""
+        active_all["_co"] = active_all["company_name"].astype(str).str.strip().str.lower() if "company_name" in active_all.columns else ""
+        active_all["_dn"] = active_all["deal_name"].astype(str).str.strip().str.lower() if "deal_name" in active_all.columns else ""
 
         deal_health_rows = []
         deal_activity_cache = {}
 
-        for idx, deal in active.iterrows():
+        for idx, deal in active_all.iterrows():
             co = deal["_co"]
             dn = deal["_dn"]
 
@@ -1821,7 +1826,7 @@ elif st.session_state.page == "deals":
 
         mg = pd.DataFrame(deal_health_rows)
 
-        # KPIs
+        # KPIs - use all deals regardless of close status filter
         na = len(mg[mg["health"] == "Active"])
         nw = len(mg) - na
         matched_deals = mg[mg["total"] > 0]
@@ -1832,6 +1837,14 @@ elif st.session_state.page == "deals":
             ("Needs Attention", f"{nw}", "red"),
             ("Company Match", f"{len(matched_deals)}/{len(mg)}", "cyan"),
         ])
+
+        # Create filtered version for detailed analysis that respects close status filter
+        if len(selected_close_status) < len(CLOSE_STATUS_OPTIONS):
+            # Only filter if not all close status options are selected
+            mg_filtered = mg[mg["close_status"].isin(selected_close_status)] if "close_status" in mg.columns else mg.copy()
+            st.info(f"🔍 **Close Status Filter Active:** Detailed views below show only {', '.join(selected_close_status)} deals. KPIs above show all deals.")
+        else:
+            mg_filtered = mg.copy()  # No filtering if all options selected
 
         section_divider()
 
@@ -2134,11 +2147,11 @@ elif st.session_state.page == "deals":
 CRITICAL: You are analyzing deals filtered by Close Status. Here's what each status means:
 - "Expect" = High confidence (80-90% chance) - These are deals that should close this quarter
 - "Best Case" = Moderate confidence (40-60% chance) - Stretch opportunities that could close with focused effort  
-- "Commit" = Highest confidence (90%+ chance) - Deals that are essentially locked in
+- "Opportunity" = Highest confidence (90%+ chance) - Deals that are essentially locked in
 
 Currently analyzing deals with Close Status: {', '.join(selected_close_status)}
 
-Focus your analysis on these confidence levels. If analyzing "Expect" deals, emphasize execution and removing barriers. If analyzing "Best Case" deals, focus on what needs to happen to increase confidence. Mix accordingly based on what's selected.
+Focus your analysis on these confidence levels. If analyzing "Expect" deals, emphasize execution and removing barriers. If analyzing "Best Case" deals, focus on what needs to happen to increase confidence. If analyzing "Opportunity" deals, focus on protection and ensuring smooth close. Mix accordingly based on what's selected.
 
 Write 3-4 sentences summarizing this rep's pipeline health. Be specific — mention deal names, call out what's working and what needs attention. Adapt your tone to this specific rep's coaching profile above. No markdown formatting — just clean, conversational prose.""",
                         messages=[{"role": "user", "content": pipeline_context}]
@@ -2165,7 +2178,7 @@ Write 3-4 sentences summarizing this rep's pipeline health. Be specific — ment
 CLOSE STATUS INTELLIGENCE: You're analyzing deals by their Close Status confidence level:
 - "Expect" (80-90% confidence) → Focus on execution: removing barriers, confirming next steps, ensuring smooth close process
 - "Best Case" (40-60% confidence) → Focus on advancement: what specific actions can move this to "Expect" level? What objections/concerns need addressing?
-- "Commit" (90%+ confidence) → Focus on protection: ensure nothing derails this, timing coordination, paperwork readiness
+- "Opportunity" (90%+ confidence) → Focus on protection: ensure nothing derails this, timing coordination, paperwork readiness
 
 Currently filtering for: {', '.join(selected_close_status)}
 
@@ -3355,7 +3368,7 @@ CONTEXT: This report pairs with the CRO Scorecard. When leadership looks at the 
 CLOSE STATUS INTELLIGENCE: You're analyzing deals filtered by Close Status - understand what each means:
 - "Expect" (80-90% confidence) = High confidence deals that should close this quarter - leadership focus should be on execution and removing barriers
 - "Best Case" (40-60% confidence) = Stretch opportunities that could close with focused effort - leadership should identify what specific actions can move these to higher confidence
-- "Commit" (90%+ confidence) = Essentially locked deals - leadership should protect these and ensure smooth coordination
+- "Opportunity" (90%+ confidence) = Essentially locked deals - leadership should protect these and ensure smooth coordination
 
 Currently analyzing deals with Close Status: {', '.join(selected_close_status)}
 
@@ -3731,7 +3744,7 @@ Use these EXACT delimiters. Write naturally within each section — no markdown,
         # Per-rep deals
         section_header("👥", "Deals by Rep", C["score"])
         for rep in selected_reps:
-            rd = mg[mg["hubspot_owner_name"] == rep] if "hubspot_owner_name" in mg.columns else pd.DataFrame()
+            rd = mg_filtered[mg_filtered["hubspot_owner_name"] == rep] if "hubspot_owner_name" in mg_filtered.columns else pd.DataFrame()
             if rd.empty: continue
             n_deals = len(rd)
             v = rd["amount"].sum() if "amount" in rd.columns else 0
@@ -3806,7 +3819,7 @@ You are NOT an analyst writing a report. You are a coach talking to a specific p
 CLOSE STATUS CONTEXT: This deal's Close Status indicates confidence level:
 - "Expect" (80-90% confidence) = This should close this quarter - focus on execution, removing barriers, confirming next steps
 - "Best Case" (40-60% confidence) = Stretch opportunity - what specific actions can move this to higher confidence? 
-- "Commit" (90%+ confidence) = Deal is essentially locked - protect it, coordinate timing, ensure nothing derails it
+- "Opportunity" (90%+ confidence) = Deal is essentially locked - protect it, coordinate timing, ensure nothing derails it
 
 COACHING APPROACH:
 - Read the activity timeline like a story — WHO is reaching out, WHO is responding? One-way outreach is a red flag. Back-and-forth is healthy.
