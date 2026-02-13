@@ -4045,26 +4045,44 @@ CREATIVE RE-ENGAGEMENT IDEAS (when deals go quiet):
                     st.dataframe(unmatched_cos.head(30), use_container_width=True, hide_index=True)
 def _detect_sequence_emails(email_df):
     """
-    SIMPLE TEST VERSION - just to see if this function gets called at all
-    """
-    print("DEBUG: SEQUENCE FUNCTION CALLED!")
-    print(f"DEBUG: Email dataframe shape: {email_df.shape if not email_df.empty else 'EMPTY'}")
+    Detect sequence emails using sequence_id column.
     
+    RULE: If sequence_id has a real value (not <NA>) = sequence email
+          If sequence_id is <NA> or empty = personal email
+    """
     if email_df.empty:
-        print("DEBUG: Email dataframe is empty, returning empty results")
         return pd.DataFrame(), pd.DataFrame()
     
-    print(f"DEBUG: Email columns: {list(email_df.columns)}")
+    email_df = email_df.copy()
     
-    # Just split 50/50 for testing
-    half = len(email_df) // 2
-    sequence_emails = email_df.iloc[:half].copy()
-    personal_emails = email_df.iloc[half:].copy()
+    # Find sequence_id column
+    if "sequence_id" not in email_df.columns:
+        print(f"DEBUG: No sequence_id column found")
+        return pd.DataFrame(), email_df.copy()
     
-    print(f"DEBUG: SIMPLE SPLIT - {len(sequence_emails)} sequence, {len(personal_emails)} personal")
+    seq_col = email_df["sequence_id"]
+    print(f"DEBUG: Total emails: {len(email_df)}")
+    print(f"DEBUG: All unique values: {sorted(seq_col.unique(), key=str)}")
+    
+    # Check for REAL sequence values (not <NA>, not empty, not null)
+    has_real_sequence = (
+        seq_col.notna() &  # not pandas null
+        (seq_col != '<NA>') &  # not pandas <NA> string
+        (seq_col.astype(str).str.strip() != '') &  # not empty string
+        (~seq_col.astype(str).str.strip().isin(['nan', 'None', 'null']))  # not other null representations
+    )
+    
+    sequence_emails = email_df[has_real_sequence].copy()
+    personal_emails = email_df[~has_real_sequence].copy()
+    
+    print(f"DEBUG: FINAL RESULT - {len(sequence_emails)} sequence emails, {len(personal_emails)} personal emails")
+    
+    # Show what got categorized where
+    if len(sequence_emails) > 0:
+        sample_seq_ids = sequence_emails["sequence_id"].head(3).tolist()
+        print(f"DEBUG: Sample SEQUENCE IDs: {sample_seq_ids}")
+    if len(personal_emails) > 0:
+        sample_personal_ids = personal_emails["sequence_id"].head(3).tolist()
+        print(f"DEBUG: Sample PERSONAL IDs: {sample_personal_ids}")
     
     return sequence_emails, personal_emails
-
-# MAKE SURE THIS IS CALLED RIGHT AFTER THE EMAIL FILTERING LINE:
-# fe = _fdate_raw(_frep(data.emails), "activity_date")
-# fe_sequence, fe_personal = _detect_sequence_emails(fe)  # ADD THIS LINE
