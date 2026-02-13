@@ -4043,3 +4043,28 @@ CREATIVE RE-ENGAGEMENT IDEAS (when deals go quiet):
                 unmatched_cos = unmatched[["company_name", "deal_name", "hubspot_owner_name"]].drop_duplicates() if all(c in unmatched.columns for c in ("company_name", "deal_name", "hubspot_owner_name")) else pd.DataFrame()
                 if not unmatched_cos.empty:
                     st.dataframe(unmatched_cos.head(30), use_container_width=True, hide_index=True)
+def _detect_sequence_emails(email_df):
+    """
+    SIMPLE TEST VERSION - just to see if this function gets called at all
+    """
+    print("DEBUG: SEQUENCE FUNCTION CALLED!")
+    print(f"DEBUG: Email dataframe shape: {email_df.shape if not email_df.empty else 'EMPTY'}")
+    
+    if email_df.empty:
+        print("DEBUG: Email dataframe is empty, returning empty results")
+        return pd.DataFrame(), pd.DataFrame()
+    
+    print(f"DEBUG: Email columns: {list(email_df.columns)}")
+    
+    # Just split 50/50 for testing
+    half = len(email_df) // 2
+    sequence_emails = email_df.iloc[:half].copy()
+    personal_emails = email_df.iloc[half:].copy()
+    
+    print(f"DEBUG: SIMPLE SPLIT - {len(sequence_emails)} sequence, {len(personal_emails)} personal")
+    
+    return sequence_emails, personal_emails
+
+# MAKE SURE THIS IS CALLED RIGHT AFTER THE EMAIL FILTERING LINE:
+# fe = _fdate_raw(_frep(data.emails), "activity_date")
+# fe_sequence, fe_personal = _detect_sequence_emails(fe)  # ADD THIS LINE
