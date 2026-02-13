@@ -442,7 +442,7 @@ def styled_fig(fig, height=340):
 
 def _detect_sequence_emails(email_df):
     """
-    Detect sequence/automated emails vs personal emails.
+    Detect sequence/automated emails vs personal emails using Sequence ID column.
     
     Returns tuple of (sequence_emails_df, personal_emails_df)
     """
@@ -451,79 +451,26 @@ def _detect_sequence_emails(email_df):
     
     email_df = email_df.copy()
     
-    # Sequence email indicators (customize these based on your HubSpot setup)
-    sequence_indicators = [
-        # Common sequence/automation patterns
-        r'follow.?up',
-        r'checking.?in',
-        r'touched.?base',
-        r're:.*re:',  # Multiple reply chains often automated
-        r'automated',
-        r'sequence',
-        r'workflow',
-        r'template',
-        # Generic scheduling/reminder patterns
-        r'reminder',
-        r'scheduled',
-        r'upcoming',
-        # HubSpot specific automation patterns
-        r'hubspot.*automation',
-        r'drip',
-        # Common sequence subject patterns
-        r'^(hi|hello|hey)\s+[a-z]+,?\s*$',  # Very generic greetings
-        r'just\s+wanted\s+to',
-        r'wanted\s+to\s+circle\s+back',
-        r'hope\s+you.?re\s+doing\s+well',
-        r'hope\s+this\s+finds\s+you\s+well',
-    ]
+    # Check if sequence_id column exists (might be named differently)
+    sequence_col = None
+    for col in email_df.columns:
+        if 'sequence' in col.lower() and 'id' in col.lower():
+            sequence_col = col
+            break
     
-    # Personal email indicators (less likely to be sequences)
-    personal_indicators = [
-        # Specific, detailed subjects
-        r'proposal\s+for\s+[a-z]',  # "Proposal for ABC Company"  
-        r'quote\s+for\s+[a-z]',     # "Quote for XYZ order"
-        r'follow.?up\s+on\s+our\s+[a-z]',  # "Follow-up on our meeting"
-        r'meeting\s+recap',
-        r'action\s+items',
-        r'next\s+steps',
-        # Questions with specific details
-        r'\?\s*$',  # Ends with question mark (often personal)
-        # References to specific conversations/meetings
-        r'our\s+(call|meeting|conversation|discussion)',
-        r'per\s+our\s+(call|meeting|conversation|discussion)',
-        r'as\s+we\s+discussed',
-    ]
+    if sequence_col is None:
+        # Fallback: if no sequence column found, treat all as personal
+        return pd.DataFrame(), email_df.copy()
     
+    # Simple logic: if sequence_id has a value, it's a sequence email
+    # If sequence_id is null/empty, it's a personal email
     def _is_sequence_email(row):
-        """Determine if an email is likely from a sequence."""
-        if pd.isna(row.get('email_subject')):
+        seq_id = row.get(sequence_col)
+        if pd.isna(seq_id):
             return False
-            
-        subject = str(row['email_subject']).lower().strip()
-        
-        # Empty or very short subjects are often automated
-        if len(subject) < 5:
-            return True
-            
-        # Check for personal indicators first (higher priority)
-        for pattern in personal_indicators:
-            if re.search(pattern, subject, re.IGNORECASE):
-                return False
-        
-        # Check for sequence indicators
-        for pattern in sequence_indicators:
-            if re.search(pattern, subject, re.IGNORECASE):
-                return True
-                
-        # Additional heuristics
-        # Very generic subjects are often sequences
-        generic_subjects = ['hello', 'hi there', 'checking in', 'quick question', 
-                          'following up', 'touching base', 'hope you are well']
-        if subject in generic_subjects:
-            return True
-            
-        # Default to personal if no clear indicators
-        return False
+        if str(seq_id).strip() == '' or str(seq_id).strip().lower() in ['none', 'null', '0']:
+            return False
+        return True
     
     # Apply sequence detection
     email_df['is_sequence'] = email_df.apply(_is_sequence_email, axis=1)
