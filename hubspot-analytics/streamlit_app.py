@@ -2355,6 +2355,393 @@ For Owen Labombard (SDR — newer, needs confidence):
             },
         }
 
+        section_divider()
+        
+        # ═══════════════════════════════════════════════════════════════════════════════
+        # DAILY & WEEKLY ACTIVITY REPORTS
+        # ═══════════════════════════════════════════════════════════════════════════════
+        
+        def _build_daily_activity_context(rep_name, target_date=None):
+            """Build focused daily activity context for AI analysis."""
+            if target_date is None:
+                target_date = date.today()
+            
+            # Get date ranges
+            today = pd.Timestamp(target_date)
+            week_start = today - pd.Timedelta(days=6)  # 7-day window including today
+            prev_week_start = week_start - pd.Timedelta(days=7)
+            prev_week_end = week_start - pd.Timedelta(days=1)
+            
+            # Filter data for this rep
+            rep_meetings = data.meetings[data.meetings["hubspot_owner_name"] == rep_name] if "hubspot_owner_name" in data.meetings.columns else pd.DataFrame()
+            rep_calls = data.calls[data.calls["hubspot_owner_name"] == rep_name] if "hubspot_owner_name" in data.calls.columns else pd.DataFrame()
+            rep_emails = data.emails[data.emails["hubspot_owner_name"] == rep_name] if "hubspot_owner_name" in data.emails.columns else pd.DataFrame()
+            rep_tasks = data.tasks[data.tasks["hubspot_owner_name"] == rep_name] if "hubspot_owner_name" in data.tasks.columns else pd.DataFrame()
+            rep_deals = data.deals[data.deals["hubspot_owner_name"] == rep_name] if "hubspot_owner_name" in data.deals.columns else pd.DataFrame()
+            
+            def _filter_by_date(df, date_col, start_date, end_date):
+                if df.empty or date_col not in df.columns:
+                    return df
+                dt = pd.to_datetime(df[date_col], errors="coerce")
+                if dt.dt.tz is not None:
+                    dt = dt.dt.tz_localize(None)
+                return df[(dt >= pd.Timestamp(start_date)) & (dt <= pd.Timestamp(end_date) + pd.Timedelta(days=1))]
+            
+            # Today's activity
+            today_meetings = _filter_by_date(rep_meetings, "meeting_start_time", today, today)
+            today_calls = _filter_by_date(rep_calls, "activity_date", today, today)
+            today_emails = _filter_by_date(rep_emails, "activity_date", today, today)
+            today_tasks = _filter_by_date(rep_tasks, "created_date", today, today)
+            
+            # This week's activity
+            week_meetings = _filter_by_date(rep_meetings, "meeting_start_time", week_start, today)
+            week_calls = _filter_by_date(rep_calls, "activity_date", week_start, today)
+            week_emails = _filter_by_date(rep_emails, "activity_date", week_start, today)
+            week_tasks = _filter_by_date(rep_tasks, "created_date", week_start, today)
+            
+            # Previous week's activity
+            prev_meetings = _filter_by_date(rep_meetings, "meeting_start_time", prev_week_start, prev_week_end)
+            prev_calls = _filter_by_date(rep_calls, "activity_date", prev_week_start, prev_week_end)
+            prev_emails = _filter_by_date(rep_emails, "activity_date", prev_week_start, prev_week_end)
+            prev_tasks = _filter_by_date(rep_tasks, "created_date", prev_week_start, prev_week_end)
+            
+            # Active deals (touched in last 14 days)
+            two_weeks_ago = today - pd.Timedelta(days=14)
+            recent_activity = pd.concat([
+                _filter_by_date(rep_meetings, "meeting_start_time", two_weeks_ago, today),
+                _filter_by_date(rep_calls, "activity_date", two_weeks_ago, today),
+                _filter_by_date(rep_emails, "activity_date", two_weeks_ago, today)
+            ], ignore_index=True)
+            
+            active_companies = set()
+            if not recent_activity.empty and "company_name" in recent_activity.columns:
+                active_companies = set(recent_activity["company_name"].dropna().str.strip().str.lower()) - {"", "nan"}
+            
+            active_deals = rep_deals[rep_deals["company_name"].str.strip().str.lower().isin(active_companies)] if "company_name" in rep_deals.columns else pd.DataFrame()
+            active_deals = active_deals[~active_deals["is_terminal"]] if "is_terminal" in active_deals.columns else active_deals
+            
+            # Build context
+            context = f"DAILY ACTIVITY REPORT\\n"
+            context += f"Date: {target_date.strftime('%Y-%m-%d')} ({target_date.strftime('%A')})\\n"
+            context += f"Rep: {rep_name}\\n\\n"
+            
+            # Today's numbers
+            context += f"TODAY'S ACTIVITY:\\n"
+            context += f"  Calls: {len(today_calls)}\\n"
+            context += f"  Meetings: {len(today_meetings)}\\n"
+            context += f"  Emails: {len(today_emails)}\\n"
+            context += f"  Tasks: {len(today_tasks)}\\n\\n"
+            
+            # This week vs previous week
+            context += f"WEEK COMPARISON (7-day rolling):\\n"
+            context += f"  This Week: {len(week_calls)} calls, {len(week_meetings)} mtgs, {len(week_emails)} emails, {len(week_tasks)} tasks\\n"
+            context += f"  Previous Week: {len(prev_calls)} calls, {len(prev_meetings)} mtgs, {len(prev_emails)} emails, {len(prev_tasks)} tasks\\n\\n"
+            
+            # Active deals context
+            context += f"ACTIVE DEALS IN PLAY: {len(active_deals)}\\n"
+            if not active_deals.empty:
+                for _, deal in active_deals.head(8).iterrows():  # Limit to top 8 deals
+                    context += f"  • {deal.get('deal_name', 'Unknown')} ({deal.get('company_name', '')}) - "
+                    context += f"${_safe_num(deal.get('amount', 0)):,.0f} - {deal.get('deal_stage', '')} - {deal.get('close_status', '')}\\n"
+            
+            return context
+        
+        def _build_weekly_activity_context(rep_name, week_ending_date=None):
+            """Build comprehensive weekly activity context for AI analysis."""
+            if week_ending_date is None:
+                week_ending_date = date.today()
+            
+            week_end = pd.Timestamp(week_ending_date)
+            week_start = week_end - pd.Timedelta(days=6)
+            prev_week_start = week_start - pd.Timedelta(days=7)
+            prev_week_end = week_start - pd.Timedelta(days=1)
+            month_start = week_end - pd.Timedelta(days=29)  # 30-day window
+            
+            # Filter data for this rep
+            rep_meetings = data.meetings[data.meetings["hubspot_owner_name"] == rep_name] if "hubspot_owner_name" in data.meetings.columns else pd.DataFrame()
+            rep_calls = data.calls[data.calls["hubspot_owner_name"] == rep_name] if "hubspot_owner_name" in data.calls.columns else pd.DataFrame()
+            rep_emails = data.emails[data.emails["hubspot_owner_name"] == rep_name] if "hubspot_owner_name" in data.emails.columns else pd.DataFrame()
+            rep_tasks = data.tasks[data.tasks["hubspot_owner_name"] == rep_name] if "hubspot_owner_name" in data.tasks.columns else pd.DataFrame()
+            rep_deals = data.deals[data.deals["hubspot_owner_name"] == rep_name] if "hubspot_owner_name" in data.deals.columns else pd.DataFrame()
+            
+            def _filter_by_date(df, date_col, start_date, end_date):
+                if df.empty or date_col not in df.columns:
+                    return df
+                dt = pd.to_datetime(df[date_col], errors="coerce")
+                if dt.dt.tz is not None:
+                    dt = dt.dt.tz_localize(None)
+                return df[(dt >= pd.Timestamp(start_date)) & (dt <= pd.Timestamp(end_date) + pd.Timedelta(days=1))]
+            
+            # This week, previous week, and monthly averages
+            week_meetings = _filter_by_date(rep_meetings, "meeting_start_time", week_start, week_end)
+            week_calls = _filter_by_date(rep_calls, "activity_date", week_start, week_end)
+            week_emails = _filter_by_date(rep_emails, "activity_date", week_start, week_end)
+            week_tasks = _filter_by_date(rep_tasks, "created_date", week_start, week_end)
+            
+            prev_meetings = _filter_by_date(rep_meetings, "meeting_start_time", prev_week_start, prev_week_end)
+            prev_calls = _filter_by_date(rep_calls, "activity_date", prev_week_start, prev_week_end)
+            prev_emails = _filter_by_date(rep_emails, "activity_date", prev_week_start, prev_week_end)
+            prev_tasks = _filter_by_date(rep_tasks, "created_date", prev_week_start, prev_week_end)
+            
+            month_meetings = _filter_by_date(rep_meetings, "meeting_start_time", month_start, week_end)
+            month_calls = _filter_by_date(rep_calls, "activity_date", month_start, week_end)
+            month_emails = _filter_by_date(rep_emails, "activity_date", month_start, week_end)
+            month_tasks = _filter_by_date(rep_tasks, "created_date", month_start, week_end)
+            
+            # Deal progression analysis
+            week_deal_activity = pd.concat([
+                _filter_by_date(rep_meetings, "meeting_start_time", week_start, week_end),
+                _filter_by_date(rep_calls, "activity_date", week_start, week_end),
+                _filter_by_date(rep_emails, "activity_date", week_start, week_end)
+            ], ignore_index=True)
+            
+            active_companies = set()
+            if not week_deal_activity.empty and "company_name" in week_deal_activity.columns:
+                active_companies = set(week_deal_activity["company_name"].dropna().str.strip().str.lower()) - {"", "nan"}
+            
+            # Build context
+            context = f"WEEKLY ACTIVITY REPORT\\n"
+            context += f"Week Ending: {week_ending_date.strftime('%Y-%m-%d')} ({week_ending_date.strftime('%A')})\\n"
+            context += f"Rep: {rep_name}\\n\\n"
+            
+            # Activity breakdown
+            context += f"ACTIVITY BREAKDOWN:\\n"
+            context += f"  This Week: {len(week_calls)} calls, {len(week_meetings)} mtgs, {len(week_emails)} emails, {len(week_tasks)} tasks\\n"
+            context += f"  Previous Week: {len(prev_calls)} calls, {len(prev_meetings)} mtgs, {len(prev_emails)} emails, {len(prev_tasks)} tasks\\n"
+            context += f"  Monthly Avg: {len(month_calls)//4:.1f} calls, {len(month_meetings)//4:.1f} mtgs, {len(month_emails)//4:.1f} emails, {len(month_tasks)//4:.1f} tasks\\n\\n"
+            
+            # Deal activity this week
+            context += f"DEALS ENGAGED THIS WEEK: {len(active_companies)}\\n"
+            if active_companies:
+                context += f"  Companies: {', '.join(list(active_companies)[:8])}{'...' if len(active_companies) > 8 else ''}\\n"
+            
+            return context
+        
+        # Daily Activity Reports
+        section_header("📅", "Daily Activity Reports", C["calls"])
+        st.markdown("Generate focused daily activity snapshots with weekly context and pattern recognition. Sent at end of each day.", unsafe_allow_html=True)
+        
+        dc1, dc2 = st.columns([3, 1])
+        with dc1:
+            selected_rep_daily = st.selectbox("👤 Select Rep for Daily Report", ["Xander Ward (Test)"] + REPS_IN_SCOPE, key="daily_rep")
+        with dc2:
+            report_date = st.date_input("📅 Report Date", date.today(), key="daily_date")
+        
+        if st.button("📅  Generate Daily Activity Report", key="daily_report", type="primary"):
+            try:
+                import anthropic
+                import smtplib
+                from email.mime.text import MIMEText
+                from email.mime.multipart import MIMEMultipart
+                
+                client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+                
+                # Use test email for now
+                test_email = "xander@calyxcontainers.com"  # Your email for testing
+                actual_rep = selected_rep_daily.replace(" (Test)", "") if "(Test)" in selected_rep_daily else selected_rep_daily
+                
+                with st.spinner(f"Generating daily report for {actual_rep}..."):
+                    
+                    # Build activity context
+                    daily_context = _build_daily_activity_context(actual_rep, report_date)
+                    
+                    # Get coaching voice for this rep
+                    coaching_voice = _get_coaching_profile(actual_rep)
+                    
+                    # Generate AI report
+                    daily_resp = _ai_call(client,
+                        model=AI_MODEL_FAST,
+                        max_tokens=500,
+                        system=f"""You are writing a brief daily activity check-in for a sales rep at Calyx Containers (cannabis packaging). This is a friendly end-of-day summary that goes in an email.
+
+{coaching_voice}
+
+TONE: Supportive colleague, not a manager. Keep it conversational and encouraging.
+
+FORMAT:
+- 2-3 sentences on today's activity (what they accomplished)
+- 1-2 sentences on weekly patterns/trends you notice
+- 1-2 sentences with tomorrow's suggested focus
+
+Keep it under 150 words total. Be specific about numbers but encouraging in tone. No markdown formatting.""",
+                        messages=[{"role": "user", "content": f"Write a daily activity summary:\\n\\n{daily_context}"}]
+                    )
+                    
+                    ai_summary = daily_resp.content[0].text
+                    
+                    # Build email
+                    smtp_host = st.secrets.get("SMTP_HOST", "smtp.gmail.com")
+                    smtp_port = int(st.secrets.get("SMTP_PORT", 587))
+                    smtp_user = st.secrets.get("SMTP_USER", "")
+                    smtp_pass = st.secrets.get("SMTP_PASS", "")
+                    smtp_from = st.secrets.get("SMTP_FROM", smtp_user)
+                    
+                    msg = MIMEMultipart()
+                    msg["From"] = smtp_from
+                    msg["To"] = test_email
+                    msg["Subject"] = f"Daily Activity Summary — {report_date.strftime('%A, %b %d')}"
+                    
+                    email_body = f"""
+<html>
+<head>
+    <style>
+        body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; }}
+        .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px 8px 0 0; }}
+        .content {{ padding: 20px; background: #f8f9fa; }}
+        .summary {{ background: white; padding: 15px; border-radius: 6px; border-left: 4px solid #667eea; margin: 15px 0; }}
+        .footer {{ padding: 15px; font-size: 12px; color: #666; background: #e9ecef; border-radius: 0 0 8px 8px; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h2>📅 Daily Activity Summary</h2>
+        <p>{actual_rep} • {report_date.strftime('%A, %B %d, %Y')}</p>
+    </div>
+    <div class="content">
+        <div class="summary">
+            {ai_summary.replace(chr(10), '<br>')}
+        </div>
+    </div>
+    <div class="footer">
+        Generated by Calyx Activity Hub • Questions? Reply to this email.
+    </div>
+</body>
+</html>
+"""
+                    
+                    msg.attach(MIMEText(email_body, "html"))
+                    
+                    # Send email
+                    with smtplib.SMTP(smtp_host, smtp_port) as server:
+                        server.starttls()
+                        server.login(smtp_user, smtp_pass)
+                        server.send_message(msg)
+                    
+                    st.success(f"✅ Daily report sent to {test_email}")
+                    
+                    # Show preview
+                    with st.expander("📧 Email Preview"):
+                        st.markdown(f"**Subject:** Daily Activity Summary — {report_date.strftime('%A, %b %d')}")
+                        st.markdown(ai_summary)
+                        
+            except Exception as e:
+                st.error(f"Error generating daily report: {e}")
+        
+        section_divider()
+        
+        # Weekly Activity Reports  
+        section_header("📊", "Weekly Activity Reports", C["meetings"])
+        st.markdown("Generate comprehensive weekly activity analysis with pattern recognition and strategic insights. Sent every Friday.", unsafe_allow_html=True)
+        
+        wc1, wc2 = st.columns([3, 1])
+        with wc1:
+            selected_rep_weekly = st.selectbox("👤 Select Rep for Weekly Report", ["Xander Ward (Test)"] + REPS_IN_SCOPE, key="weekly_rep")
+        with wc2:
+            week_ending_date = st.date_input("📅 Week Ending", date.today(), key="weekly_date")
+        
+        if st.button("📊  Generate Weekly Activity Report", key="weekly_report", type="primary"):
+            try:
+                import anthropic
+                import smtplib
+                from email.mime.text import MIMEText
+                from email.mime.multipart import MIMEMultipart
+                
+                client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+                
+                # Use test email for now
+                test_email = "xander@calyxcontainers.com"  # Your email for testing
+                actual_rep = selected_rep_weekly.replace(" (Test)", "") if "(Test)" in selected_rep_weekly else selected_rep_weekly
+                
+                with st.spinner(f"Generating weekly report for {actual_rep}..."):
+                    
+                    # Build weekly context
+                    weekly_context = _build_weekly_activity_context(actual_rep, week_ending_date)
+                    
+                    # Get coaching voice for this rep
+                    coaching_voice = _get_coaching_profile(actual_rep)
+                    
+                    # Generate AI report
+                    weekly_resp = _ai_call(client,
+                        model=AI_MODEL_FAST,
+                        max_tokens=800,
+                        system=f"""You are writing a weekly activity analysis for a sales rep at Calyx Containers (cannabis packaging). This is a strategic weekly review that goes in an email.
+
+{coaching_voice}
+
+TONE: Insightful coach who spots patterns and provides strategic guidance. Encouraging but analytical.
+
+STRUCTURE:
+- Week Overview (2-3 sentences on activity levels vs previous week/monthly average)
+- Pattern Recognition (2-3 sentences on trends you notice - timing, types of activity, deal engagement)
+- Strategic Insights (2-3 sentences on what the patterns suggest about deal progression or approach)
+- Next Week Focus (2-3 sentences with specific recommendations)
+
+Keep it under 300 words total. Be analytical about patterns but encouraging in recommendations. No markdown formatting.""",
+                        messages=[{"role": "user", "content": f"Write a weekly activity analysis:\\n\\n{weekly_context}"}]
+                    )
+                    
+                    ai_analysis = weekly_resp.content[0].text
+                    
+                    # Build email
+                    smtp_host = st.secrets.get("SMTP_HOST", "smtp.gmail.com")
+                    smtp_port = int(st.secrets.get("SMTP_PORT", 587))
+                    smtp_user = st.secrets.get("SMTP_USER", "")
+                    smtp_pass = st.secrets.get("SMTP_PASS", "")
+                    smtp_from = st.secrets.get("SMTP_FROM", smtp_user)
+                    
+                    msg = MIMEMultipart()
+                    msg["From"] = smtp_from
+                    msg["To"] = test_email
+                    msg["Subject"] = f"Weekly Activity Analysis — Week of {(week_ending_date - timedelta(days=6)).strftime('%b %d')}"
+                    
+                    email_body = f"""
+<html>
+<head>
+    <style>
+        body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; }}
+        .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px 8px 0 0; }}
+        .content {{ padding: 20px; background: #f8f9fa; }}
+        .analysis {{ background: white; padding: 20px; border-radius: 6px; border-left: 4px solid #667eea; margin: 15px 0; }}
+        .footer {{ padding: 15px; font-size: 12px; color: #666; background: #e9ecef; border-radius: 0 0 8px 8px; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h2>📊 Weekly Activity Analysis</h2>
+        <p>{actual_rep} • Week of {(week_ending_date - timedelta(days=6)).strftime('%B %d')} - {week_ending_date.strftime('%B %d, %Y')}</p>
+    </div>
+    <div class="content">
+        <div class="analysis">
+            {ai_analysis.replace(chr(10), '<br>')}
+        </div>
+    </div>
+    <div class="footer">
+        Generated by Calyx Activity Hub • Questions? Reply to this email.
+    </div>
+</body>
+</html>
+"""
+                    
+                    msg.attach(MIMEText(email_body, "html"))
+                    
+                    # Send email
+                    with smtplib.SMTP(smtp_host, smtp_port) as server:
+                        server.starttls()
+                        server.login(smtp_user, smtp_pass)
+                        server.send_message(msg)
+                    
+                    st.success(f"✅ Weekly report sent to {test_email}")
+                    
+                    # Show preview
+                    with st.expander("📧 Email Preview"):
+                        st.markdown(f"**Subject:** Weekly Activity Analysis — Week of {(week_ending_date - timedelta(days=6)).strftime('%b %d')}")
+                        st.markdown(ai_analysis)
+                        
+            except Exception as e:
+                st.error(f"Error generating weekly report: {e}")
+
+        section_divider()
+
         section_header("👔", "Sales Leadership Playbook", C["score"])
         st.markdown("Generate the unified pipeline playbook for the leadership team — the step-by-step answer to *\"we're off goal, now what?\"* Pairs with the CRO Scorecard. Sent to Xander for review.", unsafe_allow_html=True)
 
