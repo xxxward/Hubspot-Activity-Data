@@ -15,6 +15,9 @@ from src.parsing.filters import REPS_IN_SCOPE, PIPELINES_IN_SCOPE
 from src.metrics.scoring import WEIGHTS
 from main import load_all, AnalyticsData
 
+# Close Status options for filtering
+CLOSE_STATUS_OPTIONS = ["Best Case", "Commit", "Expect"]
+
 setup_logging()
 
 st.set_page_config(
@@ -589,7 +592,7 @@ with st.expander("🔎 Filters", expanded=False):
         date_range = st.date_input("📅 Date Range", value=(_default_start, today), max_value=today)
         start_date, end_date = (date_range if isinstance(date_range, tuple) and len(date_range) == 2 else (_default_start, today))
 
-    fc1, fc2, fc3 = st.columns([2, 2, 1])
+    fc1, fc2, fc3, fc4 = st.columns([2, 2, 2, 1])
     with fc1:
         selected_reps = st.multiselect("👤 Sales Reps", REPS_IN_SCOPE, default=REPS_IN_SCOPE)
     with fc2:
@@ -598,8 +601,13 @@ with st.expander("🔎 Filters", expanded=False):
         else:
             selected_pipelines = PIPELINES_IN_SCOPE
     with fc3:
+        if st.session_state.page == "deals":
+            selected_close_status = st.multiselect("📊 Close Status", CLOSE_STATUS_OPTIONS, default=CLOSE_STATUS_OPTIONS)
+        else:
+            selected_close_status = CLOSE_STATUS_OPTIONS
+    with fc4:
         st.markdown("<br>", unsafe_allow_html=True)
-        is_filtered = (len(selected_reps) < len(REPS_IN_SCOPE)) or quick != "7d"
+        is_filtered = (len(selected_reps) < len(REPS_IN_SCOPE)) or (len(selected_pipelines) < len(PIPELINES_IN_SCOPE)) or (len(selected_close_status) < len(CLOSE_STATUS_OPTIONS)) or quick != "7d"
         if is_filtered:
             st.markdown('<span class="filter-indicator">⚡ Filters active</span>', unsafe_allow_html=True)
 
@@ -614,6 +622,10 @@ def _frep(df):
 def _fpipe(df):
     if df.empty or "pipeline" not in df.columns: return df
     return df[df["pipeline"].isin(selected_pipelines)].copy()
+
+def _fclose_status(df):
+    if df.empty or "close_status" not in df.columns: return df
+    return df[df["close_status"].isin(selected_close_status)].copy()
 
 def _fdate_raw(df, date_col="activity_date"):
     if df.empty: return df
@@ -1680,7 +1692,7 @@ elif st.session_state.page == "deals":
         <p class="page-sub">Pipeline pulse — who's engaged, who's going dark.</p>
     </div>""", unsafe_allow_html=True)
 
-    deals_f = _frep(_fpipe(data.deals))
+    deals_f = _fclose_status(_frep(_fpipe(data.deals)))
     active = deals_f[~deals_f["is_terminal"]].copy() if "is_terminal" in deals_f.columns else deals_f.copy()
 
     # For deal health: use ALL activity (not rep-filtered)
@@ -2077,6 +2089,7 @@ elif st.session_state.page == "deals":
                     # Build comprehensive pipeline context
                     pipeline_context = f"TODAY'S DATE: {date.today().strftime('%Y-%m-%d')} ({date.today().strftime('%A')})\n"
                     pipeline_context += f"REP: {rep}\n"
+                    pipeline_context += f"CLOSE STATUS FILTER: {', '.join(selected_close_status)}\n"
                     pipeline_context += f"TOTAL ACTIVE DEALS: {len(rd)}\n"
                     pipeline_context += f"TOTAL PIPELINE VALUE: ${rd['amount'].sum():,.0f}\n" if "amount" in rd.columns else ""
                     n_act_rep = len(rd[rd["health"] == "Active"])
@@ -2118,6 +2131,15 @@ elif st.session_state.page == "deals":
 
 {role_context}
 
+CRITICAL: You are analyzing deals filtered by Close Status. Here's what each status means:
+- "Expect" = High confidence (80-90% chance) - These are deals that should close this quarter
+- "Best Case" = Moderate confidence (40-60% chance) - Stretch opportunities that could close with focused effort  
+- "Commit" = Highest confidence (90%+ chance) - Deals that are essentially locked in
+
+Currently analyzing deals with Close Status: {', '.join(selected_close_status)}
+
+Focus your analysis on these confidence levels. If analyzing "Expect" deals, emphasize execution and removing barriers. If analyzing "Best Case" deals, focus on what needs to happen to increase confidence. Mix accordingly based on what's selected.
+
 Write 3-4 sentences summarizing this rep's pipeline health. Be specific — mention deal names, call out what's working and what needs attention. Adapt your tone to this specific rep's coaching profile above. No markdown formatting — just clean, conversational prose.""",
                         messages=[{"role": "user", "content": pipeline_context}]
                     )
@@ -2139,6 +2161,15 @@ Write 3-4 sentences summarizing this rep's pipeline health. Be specific — ment
 {coaching_voice}
 
 {role_context}
+
+CLOSE STATUS INTELLIGENCE: You're analyzing deals by their Close Status confidence level:
+- "Expect" (80-90% confidence) → Focus on execution: removing barriers, confirming next steps, ensuring smooth close process
+- "Best Case" (40-60% confidence) → Focus on advancement: what specific actions can move this to "Expect" level? What objections/concerns need addressing?
+- "Commit" (90%+ confidence) → Focus on protection: ensure nothing derails this, timing coordination, paperwork readiness
+
+Currently filtering for: {', '.join(selected_close_status)}
+
+Tailor your coaching to the confidence level. High confidence deals need execution focus, medium confidence deals need advancement tactics.
 
 For each deal, write 1-2 sentences in the coaching style above. Include:
 - What's really happening (read the activity direction — who's reaching out, who's responding?)
@@ -2383,6 +2414,7 @@ For Owen Labombard (SDR — newer, needs confidence):
                 am_deals = mg[mg["hubspot_owner_name"].isin(am_reps)] if "hubspot_owner_name" in mg.columns else pd.DataFrame()
 
                 full_context = f"TODAY'S DATE: {date.today().strftime('%Y-%m-%d')} ({date.today().strftime('%A')})\n\n"
+                full_context += f"CLOSE STATUS FILTER: {', '.join(selected_close_status)}\n"
                 full_context += f"PIPELINE OVERVIEW:\n"
                 full_context += f"Total Active Deals: {len(mg)} | Total Pipeline: ${_safe_num(mg['amount'].sum()) if 'amount' in mg.columns else 0:,.0f}\n"
                 full_context += f"Healthy: {len(active_deals)} | Needs Attention: {len(needs_attention)}\n"
@@ -2401,10 +2433,10 @@ JAKE LYNCH (Senior AM — managed by Kyle):
 - He values partnership. Offer to co-strategize or make a joint call.
 
 DAVE BORKOWSKI (AM — managed by Kyle):
-- Responds best to direct, candid accountability. Come down hard — he respects it and takes action.
-- Dave committed (Feb 9) to: proactive follow-ups after every meeting, increased call activity, clearer tracking, staying ahead of key accounts. Hold him to these.
-- Be specific: "Dave, you committed to proactive follow-ups. I'm seeing [deal] with no follow-up since [date]. What happened?"
-- Call out the pattern: "4 emails and no calls again — we talked about this."
+- Responds well to direct, honest feedback and clear expectations. Appreciates straightforward communication.
+- Dave committed (Feb 9) to: proactive follow-ups after every meeting, increased call activity, clearer tracking, staying ahead of key accounts. Reference these commitments positively.
+- Be specific but supportive: "Dave, I noticed [deal] hasn't had follow-up since [date] - what's your read on where they stand?"
+- Frame patterns as opportunities: "I'm seeing more email activity than calls lately - might be worth mixing in some phone outreach to break through."
 
 LANCE MITTON (Acquisition — managed by Alex):
 - Competitive. Responds to being challenged. Don't sugarcoat.
@@ -2433,6 +2465,15 @@ AUDIENCE: This single report goes to all three leaders:
 - Xander Ward (Rev Ops) — built the system, manages data & process across all teams
 
 CONTEXT: This report pairs with the CRO Scorecard. When leadership looks at the scorecard and sees "we're $X off our quarterly goal," THIS playbook is the answer to "OK, now what do we do about it?" Deal by deal, rep by rep, action by action.
+
+CLOSE STATUS INTELLIGENCE: You're analyzing deals filtered by Close Status - understand what each means:
+- "Expect" (80-90% confidence) = High confidence deals that should close this quarter - leadership focus should be on execution and removing barriers
+- "Best Case" (40-60% confidence) = Stretch opportunities that could close with focused effort - leadership should identify what specific actions can move these to higher confidence
+- "Commit" (90%+ confidence) = Essentially locked deals - leadership should protect these and ensure smooth coordination
+
+Currently analyzing deals with Close Status: {', '.join(selected_close_status)}
+
+Use this confidence context throughout your analysis. High confidence deals need execution focus, medium confidence deals need advancement tactics.
 
 {all_coaching}
 
@@ -2785,7 +2826,7 @@ Use these EXACT delimiters. Write naturally within each section — no markdown,
         with h2:
             section_header("🚩", "Flagged — Forecast with No Recent Activity", C["overdue"])
             if "close_status" in mg.columns:
-                fl = mg[(mg["close_status"].isin({"Best Case", "Commit", "Expect"})) &
+                fl = mg[(mg["close_status"].isin(selected_close_status)) &
                         (mg["health"].isin(["Stale", "Inactive", "No Activity"]))]
             else: fl = pd.DataFrame()
             if not fl.empty:
@@ -2875,6 +2916,11 @@ You are NOT an analyst writing a report. You are a coach talking to a specific p
 {coaching_voice}
 
 {role_context}
+
+CLOSE STATUS CONTEXT: This deal's Close Status indicates confidence level:
+- "Expect" (80-90% confidence) = This should close this quarter - focus on execution, removing barriers, confirming next steps
+- "Best Case" (40-60% confidence) = Stretch opportunity - what specific actions can move this to higher confidence? 
+- "Commit" (90%+ confidence) = Deal is essentially locked - protect it, coordinate timing, ensure nothing derails it
 
 COACHING APPROACH:
 - Read the activity timeline like a story — WHO is reaching out, WHO is responding? One-way outreach is a red flag. Back-and-forth is healthy.
