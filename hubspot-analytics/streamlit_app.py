@@ -1710,7 +1710,7 @@ elif st.session_state.page == "deals":
 
     an = _frep(data.notes)
 
-    if active.empty:
+    if active_all.empty:
         empty_state("No active deals found. Check your filters! 🔍")
     else:
         # ── Build per-deal activity by matching on BOTH company_name AND deal_name ──
