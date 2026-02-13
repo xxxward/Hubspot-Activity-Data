@@ -442,10 +442,10 @@ def styled_fig(fig, height=340):
 
 def _detect_sequence_emails(email_df):
     """
-    Detect sequence/automated emails vs personal emails using Sequence ID column.
+    Detect sequence/automated emails vs personal emails using sequence_id column.
     
-    Logic: If "Sequence ID" has a value = sequence email
-           If "Sequence ID" is empty/null = personal email
+    Logic: If 'sequence_id' has a value = sequence email
+           If 'sequence_id' is empty/null = personal email
     
     Returns tuple of (sequence_emails_df, personal_emails_df)
     """
@@ -454,19 +454,21 @@ def _detect_sequence_emails(email_df):
     
     email_df = email_df.copy()
     
-    # Look for the exact "Sequence ID" column
+    # Look for the sequence_id column (from the logs, it's lowercase)
     sequence_col = None
-    if "Sequence ID" in email_df.columns:
+    if "sequence_id" in email_df.columns:
+        sequence_col = "sequence_id"
+    elif "Sequence ID" in email_df.columns:
         sequence_col = "Sequence ID"
     else:
         # Fallback - look for variations
         for col in email_df.columns:
-            if col.lower().strip() == "sequence id":
+            if 'sequence' in col.lower() and 'id' in col.lower():
                 sequence_col = col
                 break
     
     if sequence_col is None:
-        print(f"DEBUG: 'Sequence ID' column not found!")
+        print(f"DEBUG: No sequence ID column found!")
         print(f"DEBUG: Available columns: {list(email_df.columns)}")
         # No sequence column found - treat all as personal emails
         return pd.DataFrame(), email_df.copy()
@@ -478,13 +480,19 @@ def _detect_sequence_emails(email_df):
     print(f"DEBUG: Total emails: {len(email_df)}")
     print(f"DEBUG: Non-null sequence IDs: {seq_values.notna().sum()}")
     print(f"DEBUG: Null sequence IDs: {seq_values.isna().sum()}")
-    print(f"DEBUG: Sample sequence ID values (non-null): {seq_values.dropna().head(5).tolist()}")
-    print(f"DEBUG: Unique non-null values count: {seq_values.dropna().nunique()}")
+    
+    # Show sample values (being careful about data types)
+    non_null_samples = seq_values.dropna()
+    if len(non_null_samples) > 0:
+        print(f"DEBUG: Sample sequence ID values (non-null): {non_null_samples.head(5).tolist()}")
+        print(f"DEBUG: Unique non-null values count: {non_null_samples.nunique()}")
+    else:
+        print(f"DEBUG: No non-null sequence ID values found")
     
     # Simple logic: 
     # - If sequence_id is not null and not empty = sequence email
     # - If sequence_id is null or empty = personal email
-    is_sequence_mask = seq_values.notna() & (seq_values.astype(str).str.strip() != '') & (seq_values.astype(str).str.strip() != 'nan')
+    is_sequence_mask = seq_values.notna() & (seq_values.astype(str).str.strip() != '') & (seq_values.astype(str).str.strip().lower() != 'nan')
     
     sequence_emails = email_df[is_sequence_mask].copy()
     personal_emails = email_df[~is_sequence_mask].copy()
