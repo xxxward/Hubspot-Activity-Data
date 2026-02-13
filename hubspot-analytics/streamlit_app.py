@@ -2694,15 +2694,16 @@ Keep it under 200 words total. Sound like an AI that's genuinely excited about d
         }}
         
         .ai-intro {{
-            background: linear-gradient(135deg, rgba(0, 255, 255, 0.1), rgba(255, 0, 128, 0.1));
-            border-left: 4px solid #00ffff;
-            padding: 20px;
-            border-radius: 0 15px 15px 0;
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid #00ffff;
+            padding: 25px;
+            border-radius: 15px;
             margin-bottom: 30px;
-            font-size: 15px;
-            line-height: 1.7;
+            font-size: 16px;
+            line-height: 1.8;
             position: relative;
-            overflow: hidden;
+            color: #ffffff;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.3);
         }}
         
         .ai-intro::before {{
@@ -2712,6 +2713,17 @@ Keep it under 200 words total. Sound like an AI that's genuinely excited about d
             right: 20px;
             font-size: 24px;
             opacity: 0.3;
+        }}
+        
+        .ai-intro p {{
+            margin: 0 0 15px 0;
+            color: #ffffff;
+            font-weight: 400;
+        }}
+        
+        .ai-intro p:last-child {{
+            margin-bottom: 0;
+            color: #ffffff;
         }}
         
         .analysis-section {{
@@ -2810,7 +2822,7 @@ Keep it under 200 words total. Sound like an AI that's genuinely excited about d
             {'<div class="test-notice"><strong>🧪 SIMULATION MODE:</strong> Analyzing Owen\'s neural patterns for testing purposes</div>' if 'Test' in display_name else ''}
             
             <div class="ai-intro">
-                {ai_summary.replace(chr(10), '<br>')}
+                {''.join(f'<p>{paragraph.strip()}</p>' for paragraph in ai_summary.split(chr(10) + chr(10)) if paragraph.strip())}
             </div>
         </div>
         
@@ -3051,29 +3063,16 @@ Keep it under 350 words total. Write like an AI that's genuinely fascinated by s
         }}
         
         .ai-intro {{
-            background: linear-gradient(135deg, rgba(0, 255, 255, 0.15), rgba(255, 0, 128, 0.15));
-            border: 1px solid rgba(0, 255, 255, 0.3);
-            border-radius: 20px;
-            padding: 25px;
+            background: rgba(0, 0, 0, 0.9);
+            border: 2px solid #00ffff;
+            border-radius: 15px;
+            padding: 30px;
             margin-bottom: 35px;
             font-size: 16px;
             line-height: 1.8;
             position: relative;
-            overflow: hidden;
-            box-shadow: inset 0 0 30px rgba(0, 255, 255, 0.1);
-        }}
-        
-        .ai-intro::before {{
-            content: '';
-            position: absolute;
-            top: -2px;
-            left: -2px;
-            right: -2px;
-            bottom: -2px;
-            background: linear-gradient(45deg, #ff0080, #00ffff, #8000ff);
-            border-radius: 20px;
-            z-index: -1;
-            animation: gradientShift 4s ease infinite;
+            color: #ffffff;
+            box-shadow: 0 0 30px rgba(0, 255, 255, 0.4);
         }}
         
         .ai-intro::after {{
@@ -3083,8 +3082,17 @@ Keep it under 350 words total. Write like an AI that's genuinely fascinated by s
             right: 20px;
             font-family: 'JetBrains Mono', monospace;
             font-size: 10px;
-            opacity: 0.4;
+            opacity: 0.6;
             letter-spacing: 1px;
+            color: #00ffff;
+        }}
+        
+        .ai-intro p {{
+            margin: 0 0 15px 0;
+        }}
+        
+        .ai-intro p:last-child {{
+            margin-bottom: 0;
         }}
         
         .analysis-grid {{
@@ -3221,7 +3229,7 @@ Keep it under 350 words total. Write like an AI that's genuinely fascinated by s
                 {'<div class="test-notice">🧪 Simulation Protocol Active • Owen Neural Pattern Analysis</div>' if 'Test' in display_name else ''}
                 
                 <div class="ai-intro">
-                    {ai_analysis.replace(chr(10), '<br>')}
+                    {''.join(f'<p>{paragraph.strip()}</p>' for paragraph in ai_analysis.split(chr(10) + chr(10)) if paragraph.strip())}
                 </div>
             </div>
             
