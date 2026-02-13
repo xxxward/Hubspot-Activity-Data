@@ -619,9 +619,12 @@ def _fdate_raw(df, date_col="activity_date"):
     if df.empty: return df
     for col in (date_col, "activity_date", "meeting_start_time", "created_date"):
         if col in df.columns:
-            dt = _localize_dt_col(df[col])
-            end_ts = pd.Timestamp(end_date, tz=LOCAL_TZ) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-            start_ts = pd.Timestamp(start_date, tz=LOCAL_TZ)
+            dt = pd.to_datetime(df[col], errors="coerce")
+            # Strip timezone if present to keep comparisons simple
+            if dt.dt.tz is not None:
+                dt = dt.dt.tz_localize(None)
+            start_ts = pd.Timestamp(start_date)
+            end_ts = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
             mask = dt.notna() & (dt >= start_ts) & (dt <= end_ts)
             return df[mask].copy()
     return df
@@ -713,15 +716,42 @@ if not ft_all.empty:
     for try_col in ("activity_date", "created_date", "due_date", "completed_at"):
         if try_col in ft_all.columns:
             candidate = pd.to_datetime(ft_all[try_col], errors="coerce")
+            if candidate.dt.tz is not None:
+                candidate = candidate.dt.tz_localize(None)
             task_dt = task_dt.fillna(candidate)
-    task_dt_local = _localize_dt_col(task_dt)
-    start_ts = pd.Timestamp(start_date, tz=LOCAL_TZ)
-    end_ts = pd.Timestamp(end_date, tz=LOCAL_TZ) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-    ft = ft_all[task_dt_local.notna() & (task_dt_local >= start_ts) & (task_dt_local <= end_ts)].copy()
+    start_ts = pd.Timestamp(start_date)
+    end_ts = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+    ft = ft_all[task_dt.notna() & (task_dt >= start_ts) & (task_dt <= end_ts)].copy()
 else:
     ft = ft_all
 
 total_activities = len(fm) + len(fc) + len(ft) + len(fe) + len(fn) + len(fk)
+
+# ── Data Diagnostics (toggle in sidebar) ──
+with st.sidebar.expander("🔧 Debug: Date Diagnostics"):
+    st.caption(f"Filter: {start_date} → {end_date}")
+    for label, src_df, dt_col in [
+        ("Meetings (raw)", data.meetings, "meeting_start_time"),
+        ("Calls (raw)", data.calls, "activity_date"),
+        ("Emails (raw)", data.emails, "activity_date"),
+        ("Notes (raw)", data.notes, "activity_date"),
+        ("Tickets (raw)", data.tickets, "created_date"),
+        ("Tasks (raw)", data.tasks, "activity_date"),
+    ]:
+        if not src_df.empty and dt_col in src_df.columns:
+            dts = pd.to_datetime(src_df[dt_col], errors="coerce").dropna()
+            if not dts.empty:
+                st.markdown(f"**{label}**: {len(dts)} rows, tz={dts.dt.tz}, min={dts.min()}, max={dts.max()}")
+                # Count how many fall in today
+                dts_naive = dts.dt.tz_localize(None) if dts.dt.tz is not None else dts
+                today_mask = (dts_naive >= pd.Timestamp(date.today())) & (dts_naive < pd.Timestamp(date.today()) + pd.Timedelta(days=1))
+                st.markdown(f"  → Today: {today_mask.sum()}")
+            else:
+                st.markdown(f"**{label}**: all NaT")
+        elif not src_df.empty:
+            st.markdown(f"**{label}**: no `{dt_col}` column. Cols: {list(src_df.columns)[:8]}")
+        else:
+            st.markdown(f"**{label}**: empty")
 
 
 # ════════════════════════════════════════════════════════════════════════
