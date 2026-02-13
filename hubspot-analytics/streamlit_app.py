@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import re
 from datetime import date, timedelta, datetime
 from zoneinfo import ZoneInfo
 from src.utils.logging import setup_logging
@@ -439,6 +440,101 @@ def styled_fig(fig, height=340):
     return fig
 
 
+def _detect_sequence_emails(email_df):
+    """
+    Detect sequence/automated emails vs personal emails.
+    
+    Returns tuple of (sequence_emails_df, personal_emails_df)
+    """
+    if email_df.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    
+    email_df = email_df.copy()
+    
+    # Sequence email indicators (customize these based on your HubSpot setup)
+    sequence_indicators = [
+        # Common sequence/automation patterns
+        r'follow.?up',
+        r'checking.?in',
+        r'touched.?base',
+        r're:.*re:',  # Multiple reply chains often automated
+        r'automated',
+        r'sequence',
+        r'workflow',
+        r'template',
+        # Generic scheduling/reminder patterns
+        r'reminder',
+        r'scheduled',
+        r'upcoming',
+        # HubSpot specific automation patterns
+        r'hubspot.*automation',
+        r'drip',
+        # Common sequence subject patterns
+        r'^(hi|hello|hey)\s+[a-z]+,?\s*$',  # Very generic greetings
+        r'just\s+wanted\s+to',
+        r'wanted\s+to\s+circle\s+back',
+        r'hope\s+you.?re\s+doing\s+well',
+        r'hope\s+this\s+finds\s+you\s+well',
+    ]
+    
+    # Personal email indicators (less likely to be sequences)
+    personal_indicators = [
+        # Specific, detailed subjects
+        r'proposal\s+for\s+[a-z]',  # "Proposal for ABC Company"  
+        r'quote\s+for\s+[a-z]',     # "Quote for XYZ order"
+        r'follow.?up\s+on\s+our\s+[a-z]',  # "Follow-up on our meeting"
+        r'meeting\s+recap',
+        r'action\s+items',
+        r'next\s+steps',
+        # Questions with specific details
+        r'\?\s*$',  # Ends with question mark (often personal)
+        # References to specific conversations/meetings
+        r'our\s+(call|meeting|conversation|discussion)',
+        r'per\s+our\s+(call|meeting|conversation|discussion)',
+        r'as\s+we\s+discussed',
+    ]
+    
+    def _is_sequence_email(row):
+        """Determine if an email is likely from a sequence."""
+        if pd.isna(row.get('email_subject')):
+            return False
+            
+        subject = str(row['email_subject']).lower().strip()
+        
+        # Empty or very short subjects are often automated
+        if len(subject) < 5:
+            return True
+            
+        # Check for personal indicators first (higher priority)
+        for pattern in personal_indicators:
+            if re.search(pattern, subject, re.IGNORECASE):
+                return False
+        
+        # Check for sequence indicators
+        for pattern in sequence_indicators:
+            if re.search(pattern, subject, re.IGNORECASE):
+                return True
+                
+        # Additional heuristics
+        # Very generic subjects are often sequences
+        generic_subjects = ['hello', 'hi there', 'checking in', 'quick question', 
+                          'following up', 'touching base', 'hope you are well']
+        if subject in generic_subjects:
+            return True
+            
+        # Default to personal if no clear indicators
+        return False
+    
+    # Apply sequence detection
+    email_df['is_sequence'] = email_df.apply(_is_sequence_email, axis=1)
+    
+    # Split into sequence and personal
+    sequence_emails = email_df[email_df['is_sequence'] == True].copy()
+    personal_emails = email_df[email_df['is_sequence'] == False].copy()
+    
+    return sequence_emails, personal_emails
+
+
 # ── Color map (consistent everywhere) ──────────────────────────────────
 C = {
     "meetings": "#f472b6", "calls": "#818cf8", "emails": "#c084fc",
@@ -720,6 +816,10 @@ def empty_state(msg="Nothing here yet — check your date range? 🤔"):
 fm = _fdate_raw(_frep(data.meetings), "meeting_start_time")
 fc = _fdate_raw(_frep(data.calls), "activity_date")
 fe = _fdate_raw(_frep(data.emails), "activity_date")
+
+# Split emails into sequence and personal
+fe_sequence, fe_personal = _detect_sequence_emails(fe)
+
 fn = _fdate_raw(_frep(data.notes), "activity_date")
 fk = _fdate_raw(_frep(data.tickets), "created_date")
 
@@ -739,7 +839,7 @@ if not ft_all.empty:
 else:
     ft = ft_all
 
-total_activities = len(fm) + len(fc) + len(ft) + len(fe) + len(fn) + len(fk)
+total_activities = len(fm) + len(fc) + len(ft) + len(fe_personal) + len(fe_sequence) + len(fn) + len(fk)
 
 # ── Data Diagnostics (toggle in sidebar) ──
 with st.sidebar.expander("🔧 Debug: Date Diagnostics"):
@@ -857,19 +957,19 @@ AI_MODEL_SMART = "claude-sonnet-4-20250514"    # For single-deal coaching
 # ── Role-Based Activity Weights ──
 ROLE_WEIGHTS = {
     "sdr": {
-        "meetings": 8, "calls": 1, "emails": 0.5,
+        "meetings": 8, "calls": 1, "emails": 0.5, "sequence_emails": 0.2,
         "completed_tasks": 2, "overdue_tasks": -3, "tickets": 1, "notes": 0.5,
     },
     "acquisition": {
-        "meetings": 6, "calls": 3, "emails": 1,
+        "meetings": 6, "calls": 3, "emails": 1, "sequence_emails": 0.4,
         "completed_tasks": 3, "overdue_tasks": -5, "tickets": 2, "notes": 1,
     },
     "am": {
-        "meetings": 10, "calls": 4, "emails": 1.5,
+        "meetings": 10, "calls": 4, "emails": 1.5, "sequence_emails": 0.6,
         "completed_tasks": 3, "overdue_tasks": -5, "tickets": 3, "notes": 1.5,
     },
     "ceo": {
-        "meetings": 5, "calls": 2, "emails": 1,
+        "meetings": 5, "calls": 2, "emails": 1, "sequence_emails": 0.4,
         "completed_tasks": 1, "overdue_tasks": -1, "tickets": 1, "notes": 0.5,
     },
 }
@@ -974,20 +1074,24 @@ def build_leaderboard():
         # Get per-rep filtered DataFrames
         rm = fm[fm["hubspot_owner_name"] == rep] if not fm.empty and "hubspot_owner_name" in fm.columns else pd.DataFrame()
         rc = fc[fc["hubspot_owner_name"] == rep] if not fc.empty and "hubspot_owner_name" in fc.columns else pd.DataFrame()
-        re_ = fe[fe["hubspot_owner_name"] == rep] if not fe.empty and "hubspot_owner_name" in fe.columns else pd.DataFrame()
+        re_personal = fe_personal[fe_personal["hubspot_owner_name"] == rep] if not fe_personal.empty and "hubspot_owner_name" in fe_personal.columns else pd.DataFrame()
+        re_sequence = fe_sequence[fe_sequence["hubspot_owner_name"] == rep] if not fe_sequence.empty and "hubspot_owner_name" in fe_sequence.columns else pd.DataFrame()
         rn = fn[fn["hubspot_owner_name"] == rep] if not fn.empty and "hubspot_owner_name" in fn.columns else pd.DataFrame()
         rk = fk[fk["hubspot_owner_name"] == rep] if not fk.empty and "hubspot_owner_name" in fk.columns else pd.DataFrame()
 
         m = len(rm)
         c = len(rc)
-        e = len(re_)
+        e_personal = len(re_personal)
+        e_sequence = len(re_sequence)
+        e_total = e_personal + e_sequence  # For display
         n = len(rn)
         k = len(rk)
 
         # Deal-tier weighted counts
         m_w = _deal_tier_multiplier(rm) if not rm.empty else 0
         c_w = _deal_tier_multiplier(rc) if not rc.empty else 0
-        e_w = _deal_tier_multiplier(re_) if not re_.empty else 0
+        e_personal_w = _deal_tier_multiplier(re_personal) if not re_personal.empty else 0
+        e_sequence_w = _deal_tier_multiplier(re_sequence) if not re_sequence.empty else 0
         n_w = _deal_tier_multiplier(rn) if not rn.empty else 0
         k_w = _deal_tier_multiplier(rk) if not rk.empty else 0
 
@@ -1007,7 +1111,8 @@ def build_leaderboard():
         base_score = (
             m_w * weights["meetings"] +
             c_w * weights["calls"] +
-            e_w * weights["emails"] +
+            e_personal_w * weights["emails"] +
+            e_sequence_w * weights["sequence_emails"] +
             comp * weights["completed_tasks"] +
             over * weights["overdue_tasks"] +
             k_w * weights["tickets"] +
@@ -1036,7 +1141,8 @@ def build_leaderboard():
             level = "cold"
 
         rows.append({
-            "Rep": rep, "Role": role, "Meetings": m, "Calls": c, "Emails": e,
+            "Rep": rep, "Role": role, "Meetings": m, "Calls": c, 
+            "Personal Emails": e_personal, "Sequence Emails": e_sequence,
             "Tasks": comp, "Overdue": over, "Notes": n, "Tickets": k,
             "Base Score": round(base_score, 1), "Streak": streak,
             "WoW": f"{'▲' if wow > 1 else '▼' if wow < 1 else '—'} {abs(wow - 1) * 100:.0f}%",
@@ -1081,7 +1187,8 @@ if st.session_state.page == "command":
         ("Total Activities", f"{total_activities:,}", "gradient"),
         ("Meetings", f"{len(fm):,}", "pink"),
         ("Calls", f"{len(fc):,}", "blue"),
-        ("Emails", f"{len(fe):,}", "purple"),
+        ("Personal Emails", f"{len(fe_personal):,}", "purple"),
+        ("Sequence Emails", f"{len(fe_sequence):,}", "cyan"),
         ("Tasks", f"{len(ft):,}", "amber"),
         ("Notes", f"{len(fn):,}", "violet"),
         ("Tickets", f"{len(fk):,}", "red"),
@@ -1112,7 +1219,7 @@ if st.session_state.page == "command":
             # Role labels
             lb_display["Role "] = lb_display["Role"].map(ROLE_LABELS)
 
-            show_cols = ["Rank", "Rep", "Role ", "Meetings", "Calls", "Emails", "Tasks",
+            show_cols = ["Rank", "Rep", "Role ", "Meetings", "Calls", "Personal Emails", "Sequence Emails", "Tasks",
                          "Overdue", "Streak 🔥", "WoW", "Score", "Level "]
             show_cols = [c for c in show_cols if c in lb_display.columns]
             st.dataframe(lb_display[show_cols], use_container_width=True, hide_index=True,
@@ -1126,8 +1233,8 @@ if st.session_state.page == "command":
     with col_mix:
         section_header("🍩", "Activity Mix", C["emails"])
         mix_data = pd.DataFrame({
-            "Type": ["Meetings", "Calls", "Emails", "Tasks", "Tickets", "Notes"],
-            "Count": [len(fm), len(fc), len(fe), len(ft), len(fk), len(fn)],
+            "Type": ["Meetings", "Calls", "Personal Emails", "Sequence Emails", "Tasks", "Tickets", "Notes"],
+            "Count": [len(fm), len(fc), len(fe_personal), len(fe_sequence), len(ft), len(fk), len(fn)],
         })
         mix_data = mix_data[mix_data["Count"] > 0]
         if not mix_data.empty:
@@ -1135,7 +1242,8 @@ if st.session_state.page == "command":
                 mix_data, names="Type", values="Count", hole=0.55,
                 color="Type",
                 color_discrete_map={
-                    "Meetings": C["meetings"], "Calls": C["calls"], "Emails": C["emails"],
+                    "Meetings": C["meetings"], "Calls": C["calls"], 
+                    "Personal Emails": C["emails"], "Sequence Emails": C["gong"],
                     "Tasks": C["tasks"], "Tickets": C["tickets"], "Notes": C["notes"],
                 },
             )
@@ -1242,7 +1350,7 @@ if st.session_state.page == "command":
             role = r["Role"]
             initials = "".join([w[0] for w in rep.split()[:2]]).upper()
             color = rep_colors.get(role, "#a78bfa")
-            total_rep = r["Meetings"] + r["Calls"] + r["Emails"] + r["Tasks"] + r["Notes"] + r["Tickets"]
+            total_rep = r["Meetings"] + r["Calls"] + r["Personal Emails"] + r["Sequence Emails"] + r["Tasks"] + r["Notes"] + r["Tickets"]
             level_text, level_cls = SCORE_LEVELS.get(r["Level"], ("", ""))
             role_label = ROLE_LABELS.get(role, "")
             streak = r.get("Streak", 0)
@@ -1284,7 +1392,7 @@ if st.session_state.page == "command":
                         </div>
                     </div>
                     <div class="rep-stats">
-                        {r['Meetings']} mtgs · {r['Calls']} calls · {r['Emails']} emails<br>
+                        {r['Meetings']} mtgs · {r['Calls']} calls · {r['Personal Emails']} emails · {r['Sequence Emails']} seq<br>
                         {r['Tasks']} tasks · {r['Overdue']} overdue · {total_rep} total
                     </div>
                     <div style="display:flex;align-items:baseline;gap:8px;margin-top:10px;">
