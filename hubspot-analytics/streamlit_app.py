@@ -486,13 +486,21 @@ def _detect_sequence_emails(email_df):
     if len(non_null_samples) > 0:
         print(f"DEBUG: Sample sequence ID values (non-null): {non_null_samples.head(5).tolist()}")
         print(f"DEBUG: Unique non-null values count: {non_null_samples.nunique()}")
+        print(f"DEBUG: Data type: {seq_values.dtype}")
     else:
         print(f"DEBUG: No non-null sequence ID values found")
     
-    # Simple logic: 
-    # - If sequence_id is not null and not empty = sequence email
-    # - If sequence_id is null or empty = personal email
-    is_sequence_mask = seq_values.notna() & (seq_values.astype(str).str.strip() != '') & (seq_values.astype(str).str.strip().lower() != 'nan')
+    # Simple and safe logic: 
+    # - If sequence_id is not null = sequence email
+    # - If sequence_id is null = personal email
+    is_sequence_mask = seq_values.notna()
+    
+    # Additional check for empty strings if it's object/string type
+    if seq_values.dtype == 'object':
+        # Convert to string safely and check for empty strings
+        seq_str = seq_values.astype(str)
+        is_not_empty = ~seq_str.isin(['', 'nan', 'None', 'null', 'NaN'])
+        is_sequence_mask = is_sequence_mask & is_not_empty
     
     sequence_emails = email_df[is_sequence_mask].copy()
     personal_emails = email_df[~is_sequence_mask].copy()
