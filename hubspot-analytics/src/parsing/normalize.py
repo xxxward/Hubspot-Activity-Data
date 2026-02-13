@@ -532,7 +532,11 @@ def strip_whitespace(df: pd.DataFrame) -> pd.DataFrame:
         if isinstance(series, pd.DataFrame):
             series = series.iloc[:, 0]
         series = series.astype(str).str.strip()
-        series = series.replace({"nan": np.nan, "": np.nan, "None": np.nan, "none": np.nan})
+        # Special handling for sequence_id - keep empty as empty string, not np.nan
+        if col == "sequence_id":
+            series = series.replace({"nan": "", "None": "", "none": ""})
+        else:
+            series = series.replace({"nan": np.nan, "": np.nan, "None": np.nan, "none": np.nan})
         df[col] = series
     return df
 
