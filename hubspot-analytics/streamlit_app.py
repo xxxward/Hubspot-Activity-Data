@@ -568,7 +568,7 @@ with st.expander("🔎 Filters", expanded=False):
             ["Today", "7d", "30d", "90d", "This Quarter", "This Year", "All Time", "Custom"],
             horizontal=True, index=1, label_visibility="collapsed",
         )
-    today = date.today()
+    today = datetime.now(LOCAL_TZ).date()
     if quick == "Today":
         start_date, end_date = today, today
     elif quick == "7d":
