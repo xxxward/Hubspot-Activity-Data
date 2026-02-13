@@ -2596,27 +2596,214 @@ Keep it under 200 words total. Sound like an AI that's genuinely excited about d
 <html>
 <head>
     <style>
-        body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; }}
-        .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px 8px 0 0; }}
-        .content {{ padding: 20px; background: #f8f9fa; }}
-        .summary {{ background: white; padding: 15px; border-radius: 6px; border-left: 4px solid #667eea; margin: 15px 0; }}
-        .test-notice {{ background: #fff3cd; padding: 10px; border-radius: 6px; border-left: 4px solid #ffc107; margin: 10px 0; font-size: 14px; }}
-        .footer {{ padding: 15px; font-size: 12px; color: #666; background: #e9ecef; border-radius: 0 0 8px 8px; }}
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+        
+        body {{
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg, #0a0a0a 0%, #1a0033 50%, #000000 100%);
+            color: #ffffff;
+            line-height: 1.6;
+        }}
+        
+        .container {{
+            max-width: 600px;
+            margin: 0 auto;
+            background: rgba(15, 15, 35, 0.95);
+            border: 1px solid rgba(0, 255, 255, 0.3);
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 20px 40px rgba(0, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+        }}
+        
+        .header {{
+            background: linear-gradient(45deg, #ff0080, #00ffff, #8000ff);
+            background-size: 400% 400%;
+            animation: gradientShift 4s ease infinite;
+            padding: 30px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }}
+        
+        .header::before {{
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.3);
+            z-index: 1;
+        }}
+        
+        .header-content {{
+            position: relative;
+            z-index: 2;
+        }}
+        
+        .header h1 {{
+            margin: 0 0 10px 0;
+            font-size: 28px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            text-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
+        }}
+        
+        .header .subtitle {{
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            opacity: 0.9;
+            font-weight: 500;
+            letter-spacing: 1px;
+        }}
+        
+        .ai-badge {{
+            display: inline-block;
+            background: rgba(0, 255, 255, 0.2);
+            border: 1px solid #00ffff;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin: 15px 0;
+            animation: pulse 2s ease-in-out infinite;
+        }}
+        
+        .content {{
+            padding: 40px 30px;
+            background: rgba(10, 10, 30, 0.8);
+        }}
+        
+        .ai-intro {{
+            background: linear-gradient(135deg, rgba(0, 255, 255, 0.1), rgba(255, 0, 128, 0.1));
+            border-left: 4px solid #00ffff;
+            padding: 20px;
+            border-radius: 0 15px 15px 0;
+            margin-bottom: 30px;
+            font-size: 15px;
+            line-height: 1.7;
+            position: relative;
+            overflow: hidden;
+        }}
+        
+        .ai-intro::before {{
+            content: '🤖';
+            position: absolute;
+            top: 15px;
+            right: 20px;
+            font-size: 24px;
+            opacity: 0.3;
+        }}
+        
+        .analysis-section {{
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 25px;
+            margin: 20px 0;
+            position: relative;
+        }}
+        
+        .section-header {{
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: #00ffff;
+            margin-bottom: 15px;
+            font-weight: 600;
+        }}
+        
+        .data-point {{
+            display: inline-block;
+            background: rgba(0, 255, 255, 0.1);
+            color: #00ffff;
+            padding: 4px 10px;
+            border-radius: 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            font-weight: 600;
+            margin: 0 5px;
+        }}
+        
+        .footer {{
+            background: rgba(0, 0, 0, 0.8);
+            padding: 25px 30px;
+            text-align: center;
+            border-top: 1px solid rgba(0, 255, 255, 0.3);
+        }}
+        
+        .footer-text {{
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.6);
+            margin: 0;
+            font-family: 'JetBrains Mono', monospace;
+            letter-spacing: 1px;
+        }}
+        
+        .test-notice {{
+            background: linear-gradient(135deg, rgba(255, 193, 7, 0.2), rgba(255, 152, 0, 0.2));
+            border: 1px solid rgba(255, 193, 7, 0.5);
+            border-radius: 12px;
+            padding: 15px 20px;
+            margin: 20px 0;
+            font-size: 13px;
+            text-align: center;
+            animation: glow 3s ease-in-out infinite alternate;
+        }}
+        
+        @keyframes gradientShift {{
+            0% {{ background-position: 0% 50%; }}
+            50% {{ background-position: 100% 50%; }}
+            100% {{ background-position: 0% 50%; }}
+        }}
+        
+        @keyframes pulse {{
+            0%, 100% {{ opacity: 1; transform: scale(1); }}
+            50% {{ opacity: 0.8; transform: scale(1.05); }}
+        }}
+        
+        @keyframes glow {{
+            from {{ box-shadow: 0 0 10px rgba(255, 193, 7, 0.3); }}
+            to {{ box-shadow: 0 0 20px rgba(255, 193, 7, 0.6); }}
+        }}
+        
+        /* Dark mode optimizations */
+        @media (prefers-color-scheme: dark) {{
+            .container {{ 
+                background: rgba(5, 5, 15, 0.98);
+                border-color: rgba(0, 255, 255, 0.4);
+            }}
+        }}
     </style>
 </head>
 <body>
-    <div class="header">
-        <h2>📅 Daily Activity Summary</h2>
-        <p>{display_name} • {report_date.strftime('%A, %B %d, %Y')}</p>
-    </div>
-    <div class="content">
-        {'<div class="test-notice"><strong>🧪 TEST MODE:</strong> This report analyzes Owen\'s activity data but was sent to you for testing.</div>' if 'Test' in display_name else ''}
-        <div class="summary">
-            {ai_summary.replace(chr(10), '<br>')}
+    <div class="container">
+        <div class="header">
+            <div class="header-content">
+                <h1>⚡ Daily Intelligence</h1>
+                <div class="ai-badge">AI Sales Coach • Active</div>
+                <div class="subtitle">{display_name} • {report_date.strftime('%A, %B %d, %Y')}</div>
+            </div>
         </div>
-    </div>
-    <div class="footer">
-        Generated by Calyx Activity Hub • Questions? Reply to this email.
+        
+        <div class="content">
+            {'<div class="test-notice"><strong>🧪 SIMULATION MODE:</strong> Analyzing Owen\'s neural patterns for testing purposes</div>' if 'Test' in display_name else ''}
+            
+            <div class="ai-intro">
+                {ai_summary.replace(chr(10), '<br>')}
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p class="footer-text">CALYX INTELLIGENCE NETWORK • SALES OPTIMIZATION PROTOCOL v2.1</p>
+        </div>
     </div>
 </body>
 </html>
@@ -2722,27 +2909,313 @@ Keep it under 350 words total. Write like an AI that's genuinely fascinated by s
 <html>
 <head>
     <style>
-        body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; }}
-        .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px 8px 0 0; }}
-        .content {{ padding: 20px; background: #f8f9fa; }}
-        .analysis {{ background: white; padding: 20px; border-radius: 6px; border-left: 4px solid #667eea; margin: 15px 0; }}
-        .test-notice {{ background: #fff3cd; padding: 10px; border-radius: 6px; border-left: 4px solid #ffc107; margin: 10px 0; font-size: 14px; }}
-        .footer {{ padding: 15px; font-size: 12px; color: #666; background: #e9ecef; border-radius: 0 0 8px 8px; }}
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Orbitron:wght@400;500;600;700;800&display=swap');
+        
+        body {{
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: radial-gradient(circle at center, #1a0033 0%, #000011 50%, #000000 100%);
+            color: #ffffff;
+            line-height: 1.6;
+            min-height: 100vh;
+        }}
+        
+        .container {{
+            max-width: 650px;
+            margin: 0 auto;
+            background: linear-gradient(135deg, rgba(10, 0, 30, 0.9), rgba(0, 10, 35, 0.9));
+            border: 2px solid transparent;
+            border-image: linear-gradient(45deg, #ff0080, #00ffff, #8000ff, #ff0080) 1;
+            border-radius: 25px;
+            overflow: hidden;
+            box-shadow: 
+                0 0 50px rgba(0, 255, 255, 0.3),
+                inset 0 0 50px rgba(255, 0, 128, 0.1);
+            backdrop-filter: blur(15px);
+            position: relative;
+        }}
+        
+        .container::before {{
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: 
+                radial-gradient(circle at 20% 20%, rgba(0, 255, 255, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(255, 0, 128, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 50% 50%, rgba(128, 0, 255, 0.05) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: 1;
+        }}
+        
+        .content-wrapper {{
+            position: relative;
+            z-index: 2;
+        }}
+        
+        .header {{
+            background: linear-gradient(45deg, #ff0080, #00ffff, #8000ff, #ff0080);
+            background-size: 400% 400%;
+            animation: gradientShift 6s ease infinite;
+            padding: 40px 35px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }}
+        
+        .header::before {{
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.4);
+            z-index: 1;
+        }}
+        
+        .header::after {{
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: conic-gradient(from 0deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+            animation: rotate 8s linear infinite;
+            z-index: 1;
+        }}
+        
+        .header-content {{
+            position: relative;
+            z-index: 2;
+        }}
+        
+        .header h1 {{
+            margin: 0 0 15px 0;
+            font-family: 'Orbitron', monospace;
+            font-size: 32px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            text-shadow: 0 0 30px rgba(255, 255, 255, 0.8);
+            background: linear-gradient(45deg, #ffffff, #00ffff, #ffffff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }}
+        
+        .ai-status {{
+            display: inline-block;
+            background: rgba(0, 0, 0, 0.6);
+            border: 2px solid #00ffff;
+            padding: 10px 20px;
+            border-radius: 25px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin: 15px 0;
+            animation: pulse 2s ease-in-out infinite;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.5);
+        }}
+        
+        .subtitle {{
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            opacity: 0.9;
+            font-weight: 500;
+            letter-spacing: 1px;
+        }}
+        
+        .content {{
+            padding: 45px 35px;
+            background: rgba(5, 5, 20, 0.8);
+        }}
+        
+        .ai-intro {{
+            background: linear-gradient(135deg, rgba(0, 255, 255, 0.15), rgba(255, 0, 128, 0.15));
+            border: 1px solid rgba(0, 255, 255, 0.3);
+            border-radius: 20px;
+            padding: 25px;
+            margin-bottom: 35px;
+            font-size: 16px;
+            line-height: 1.8;
+            position: relative;
+            overflow: hidden;
+            box-shadow: inset 0 0 30px rgba(0, 255, 255, 0.1);
+        }}
+        
+        .ai-intro::before {{
+            content: '';
+            position: absolute;
+            top: -2px;
+            left: -2px;
+            right: -2px;
+            bottom: -2px;
+            background: linear-gradient(45deg, #ff0080, #00ffff, #8000ff);
+            border-radius: 20px;
+            z-index: -1;
+            animation: gradientShift 4s ease infinite;
+        }}
+        
+        .ai-intro::after {{
+            content: '🤖 NEURAL NETWORK ACTIVE';
+            position: absolute;
+            top: 15px;
+            right: 20px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            opacity: 0.4;
+            letter-spacing: 1px;
+        }}
+        
+        .analysis-grid {{
+            display: grid;
+            gap: 20px;
+            margin: 30px 0;
+        }}
+        
+        .analysis-section {{
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 18px;
+            padding: 30px;
+            position: relative;
+            transition: all 0.3s ease;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }}
+        
+        .analysis-section::before {{
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #ff0080, #00ffff, #8000ff);
+            border-radius: 18px 18px 0 0;
+        }}
+        
+        .section-header {{
+            font-family: 'Orbitron', monospace;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            color: #00ffff;
+            margin-bottom: 18px;
+            font-weight: 600;
+            text-shadow: 0 0 10px rgba(0, 255, 255, 0.5);
+        }}
+        
+        .data-metric {{
+            display: inline-block;
+            background: linear-gradient(135deg, rgba(0, 255, 255, 0.2), rgba(255, 0, 128, 0.2));
+            border: 1px solid rgba(0, 255, 255, 0.4);
+            color: #ffffff;
+            padding: 8px 15px;
+            border-radius: 12px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            font-weight: 600;
+            margin: 0 8px 8px 0;
+            box-shadow: 0 4px 15px rgba(0, 255, 255, 0.2);
+        }}
+        
+        .footer {{
+            background: rgba(0, 0, 0, 0.9);
+            padding: 30px 35px;
+            text-align: center;
+            border-top: 2px solid rgba(0, 255, 255, 0.3);
+            position: relative;
+        }}
+        
+        .footer-text {{
+            font-family: 'Orbitron', monospace;
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.7);
+            margin: 0;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }}
+        
+        .test-notice {{
+            background: linear-gradient(135deg, rgba(255, 193, 7, 0.25), rgba(255, 152, 0, 0.25));
+            border: 2px solid rgba(255, 193, 7, 0.6);
+            border-radius: 15px;
+            padding: 20px 25px;
+            margin: 25px 0;
+            font-size: 14px;
+            text-align: center;
+            animation: glow 3s ease-in-out infinite alternate;
+            font-family: 'JetBrains Mono', monospace;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }}
+        
+        @keyframes gradientShift {{
+            0% {{ background-position: 0% 50%; }}
+            50% {{ background-position: 100% 50%; }}
+            100% {{ background-position: 0% 50%; }}
+        }}
+        
+        @keyframes rotate {{
+            from {{ transform: rotate(0deg); }}
+            to {{ transform: rotate(360deg); }}
+        }}
+        
+        @keyframes pulse {{
+            0%, 100% {{ 
+                opacity: 1; 
+                transform: scale(1);
+                box-shadow: 0 0 20px rgba(0, 255, 255, 0.5);
+            }}
+            50% {{ 
+                opacity: 0.8; 
+                transform: scale(1.05);
+                box-shadow: 0 0 30px rgba(0, 255, 255, 0.8);
+            }}
+        }}
+        
+        @keyframes glow {{
+            from {{ 
+                box-shadow: 0 0 15px rgba(255, 193, 7, 0.4);
+                border-color: rgba(255, 193, 7, 0.6);
+            }}
+            to {{ 
+                box-shadow: 0 0 25px rgba(255, 193, 7, 0.8);
+                border-color: rgba(255, 193, 7, 0.9);
+            }}
+        }}
     </style>
 </head>
 <body>
-    <div class="header">
-        <h2>📊 Weekly Activity Analysis</h2>
-        <p>{display_name} • Week of {(week_ending_date - timedelta(days=6)).strftime('%B %d')} - {week_ending_date.strftime('%B %d, %Y')}</p>
-    </div>
-    <div class="content">
-        {'<div class="test-notice"><strong>🧪 TEST MODE:</strong> This report analyzes Owen\'s activity data but was sent to you for testing.</div>' if 'Test' in display_name else ''}
-        <div class="analysis">
-            {ai_analysis.replace(chr(10), '<br>')}
+    <div class="container">
+        <div class="content-wrapper">
+            <div class="header">
+                <div class="header-content">
+                    <h1>🧠 NEURAL ANALYSIS</h1>
+                    <div class="ai-status">Intelligence System • Online</div>
+                    <div class="subtitle">{display_name} • Week Protocol {(week_ending_date - timedelta(days=6)).strftime('%m.%d')} - {week_ending_date.strftime('%m.%d.%Y')}</div>
+                </div>
+            </div>
+            
+            <div class="content">
+                {'<div class="test-notice">🧪 Simulation Protocol Active • Owen Neural Pattern Analysis</div>' if 'Test' in display_name else ''}
+                
+                <div class="ai-intro">
+                    {ai_analysis.replace(chr(10), '<br>')}
+                </div>
+            </div>
+            
+            <div class="footer">
+                <p class="footer-text">CALYX NEURAL NETWORK • SALES INTELLIGENCE MATRIX v3.0 • QUANTUM OPTIMIZATION ENABLED</p>
+            </div>
         </div>
-    </div>
-    <div class="footer">
-        Generated by Calyx Activity Hub • Questions? Reply to this email.
     </div>
 </body>
 </html>
