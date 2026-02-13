@@ -794,8 +794,8 @@ REP_COACHING = {
         "voice": """COACHING TONE FOR JAKE: Jake is a senior AM — treat him as a peer, not a direct report. Use collaborative language: "what if we tried...", "one angle worth exploring...", "thinking about this together...". He's strategic and wants to understand the WHY behind the recommendation. Connect the dots between activity patterns and business outcomes. Respect his experience — frame suggestions as options, not instructions.""",
     },
     "Dave Borkowski": {
-        "tone": "inception_suggestive",
-        "voice": """COACHING TONE FOR DAVE: Dave is senior but benefits from having ideas planted rather than handed to him. Use inception-style coaching — make him think the idea is his. Phrases like "have you considered...", "I wonder if...", "something interesting I noticed is...", "one thing that could be worth exploring...". Don't be prescriptive. Frame everything as an observation or question that naturally leads to the right action. He responds best when he feels ownership of the strategy.""",
+        "tone": "direct_accountability",
+        "voice": """COACHING TONE FOR DAVE: Dave responds best to direct, candid accountability. Don't sugarcoat, don't plant seeds — come down hard. He respects it and takes action when called out specifically. Use phrases like "I'm not seeing follow-up on...", "this is unacceptable given what you committed to...", "you told Kyle you'd prioritize proactive follow-ups and increased call activity — the data says otherwise." Reference specific deals and specific gaps. Dave committed to: (1) proactive follow-ups after every meeting, (2) increased call activity, (3) clearer tracking to prevent gaps, (4) staying ahead of key accounts and maintaining stronger momentum. Hold him to EVERY ONE of these commitments. If he's falling short, say so directly. He will appreciate the candor and act on it.""",
     },
     "Alex Gonzalez": {
         "tone": "executive_brief",
@@ -2263,12 +2263,13 @@ For Jake Lynch (Senior AM — collaborative, strategic thinker):
 - If he's stuck on a deal, offer to co-strategize or make a joint call. He values partnership.
 - When Jake's deals are healthy, acknowledge it — "your engagement on [deal] is exactly the model."
 
-For Dave Borkowski (AM — needs ideas planted, not handed):
-- Dave is senior but executes best when he thinks the strategy is his own idea.
-- In your 1:1, DON'T say "you should do X." Instead try: "I noticed something interesting on [deal] — have you thought about...?"
-- Plant seeds. Let him arrive at the action. He'll execute harder when he owns it.
-- If Dave has stale deals, frame it as an observation: "What's your read on [company]? The data shows it's been quiet since [date]."
-- Avoid giving him a task list — instead ask questions that lead him to the right answers.
+For Dave Borkowski (AM — needs direct accountability, responds to being called out):
+- Dave responds best to candid, specific feedback. Don't soften it — he respects directness and takes action.
+- Dave committed to Kyle on Feb 9 that he would: prioritize proactive follow-ups, increase call activity, track more clearly, and stay ahead of key accounts. HOLD HIM TO THESE COMMITMENTS.
+- In your 1:1, be specific: "Dave, you committed to proactive follow-ups after every meeting. I'm seeing [X deal] with no follow-up since [date]. What happened?"
+- Call out the pattern, not just the instance: "I'm seeing 4 emails and no calls again. We talked about this."
+- When he's executing well, acknowledge it — but don't let up. "Good follow-up on [deal]. Now let's make sure [other deal] gets the same treatment."
+- Dave takes ownership when confronted directly. He'll say "you're right, I'll address it tomorrow" — your job is to check that he actually did.
 """,
             },
             "Alex Gonzalez": {
@@ -2379,9 +2380,10 @@ JAKE LYNCH (Senior AM — managed by Kyle):
 - He values partnership. Offer to co-strategize or make a joint call.
 
 DAVE BORKOWSKI (AM — managed by Kyle):
-- Senior but executes best when he thinks the strategy is his own idea. Use inception.
-- DON'T say "you should do X." Say: "I noticed something interesting on [deal] — have you thought about...?"
-- Frame it as an observation. Let him arrive at the action.
+- Responds best to direct, candid accountability. Come down hard — he respects it and takes action.
+- Dave committed (Feb 9) to: proactive follow-ups after every meeting, increased call activity, clearer tracking, staying ahead of key accounts. Hold him to these.
+- Be specific: "Dave, you committed to proactive follow-ups. I'm seeing [deal] with no follow-up since [date]. What happened?"
+- Call out the pattern: "4 emails and no calls again — we talked about this."
 
 LANCE MITTON (Acquisition — managed by Alex):
 - Competitive. Responds to being challenged. Don't sugarcoat.
