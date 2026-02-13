@@ -2523,7 +2523,7 @@ For Owen Labombard (SDR — newer, needs confidence):
         
         dc1, dc2 = st.columns([3, 1])
         with dc1:
-            selected_rep_daily = st.selectbox("👤 Select Rep for Daily Report", ["Xander Ward (Test)"] + REPS_IN_SCOPE, key="daily_rep")
+            selected_rep_daily = st.selectbox("👤 Select Rep for Daily Report", REPS_IN_SCOPE + ["Test with Owen's Data"], key="daily_rep")
         with dc2:
             report_date = st.date_input("📅 Report Date", date.today(), key="daily_date")
         
@@ -2536,11 +2536,16 @@ For Owen Labombard (SDR — newer, needs confidence):
                 
                 client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
                 
-                # Use test email for now
+                # Use test email for now, but get the right rep's data
                 test_email = "xander@calyxcontainers.com"  # Your email for testing
-                actual_rep = selected_rep_daily.replace(" (Test)", "") if "(Test)" in selected_rep_daily else selected_rep_daily
+                if selected_rep_daily == "Test with Owen's Data":
+                    actual_rep = "Owen Labombard"  # Use Owen's activity data
+                    display_name = "Owen Labombard (Test Mode)"
+                else:
+                    actual_rep = selected_rep_daily
+                    display_name = actual_rep
                 
-                with st.spinner(f"Generating daily report for {actual_rep}..."):
+                with st.spinner(f"Generating daily report for {display_name}..."):
                     
                     # Build activity context
                     daily_context = _build_daily_activity_context(actual_rep, report_date)
@@ -2579,7 +2584,7 @@ Keep it under 150 words total. Be specific about numbers but encouraging in tone
                     msg = MIMEMultipart()
                     msg["From"] = smtp_from
                     msg["To"] = test_email
-                    msg["Subject"] = f"Daily Activity Summary — {report_date.strftime('%A, %b %d')}"
+                    msg["Subject"] = f"Daily Activity Summary — {report_date.strftime('%A, %b %d')} [{display_name}]"
                     
                     email_body = f"""
 <html>
@@ -2589,15 +2594,17 @@ Keep it under 150 words total. Be specific about numbers but encouraging in tone
         .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px 8px 0 0; }}
         .content {{ padding: 20px; background: #f8f9fa; }}
         .summary {{ background: white; padding: 15px; border-radius: 6px; border-left: 4px solid #667eea; margin: 15px 0; }}
+        .test-notice {{ background: #fff3cd; padding: 10px; border-radius: 6px; border-left: 4px solid #ffc107; margin: 10px 0; font-size: 14px; }}
         .footer {{ padding: 15px; font-size: 12px; color: #666; background: #e9ecef; border-radius: 0 0 8px 8px; }}
     </style>
 </head>
 <body>
     <div class="header">
         <h2>📅 Daily Activity Summary</h2>
-        <p>{actual_rep} • {report_date.strftime('%A, %B %d, %Y')}</p>
+        <p>{display_name} • {report_date.strftime('%A, %B %d, %Y')}</p>
     </div>
     <div class="content">
+        {'<div class="test-notice"><strong>🧪 TEST MODE:</strong> This report analyzes Owen\'s activity data but was sent to you for testing.</div>' if 'Test' in display_name else ''}
         <div class="summary">
             {ai_summary.replace(chr(10), '<br>')}
         </div>
@@ -2635,7 +2642,7 @@ Keep it under 150 words total. Be specific about numbers but encouraging in tone
         
         wc1, wc2 = st.columns([3, 1])
         with wc1:
-            selected_rep_weekly = st.selectbox("👤 Select Rep for Weekly Report", ["Xander Ward (Test)"] + REPS_IN_SCOPE, key="weekly_rep")
+            selected_rep_weekly = st.selectbox("👤 Select Rep for Weekly Report", REPS_IN_SCOPE + ["Test with Owen's Data"], key="weekly_rep")
         with wc2:
             week_ending_date = st.date_input("📅 Week Ending", date.today(), key="weekly_date")
         
@@ -2648,11 +2655,16 @@ Keep it under 150 words total. Be specific about numbers but encouraging in tone
                 
                 client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
                 
-                # Use test email for now
+                # Use test email for now, but get the right rep's data
                 test_email = "xander@calyxcontainers.com"  # Your email for testing
-                actual_rep = selected_rep_weekly.replace(" (Test)", "") if "(Test)" in selected_rep_weekly else selected_rep_weekly
+                if selected_rep_weekly == "Test with Owen's Data":
+                    actual_rep = "Owen Labombard"  # Use Owen's activity data
+                    display_name = "Owen Labombard (Test Mode)"
+                else:
+                    actual_rep = selected_rep_weekly
+                    display_name = actual_rep
                 
-                with st.spinner(f"Generating weekly report for {actual_rep}..."):
+                with st.spinner(f"Generating weekly report for {display_name}..."):
                     
                     # Build weekly context
                     weekly_context = _build_weekly_activity_context(actual_rep, week_ending_date)
@@ -2692,7 +2704,7 @@ Keep it under 300 words total. Be analytical about patterns but encouraging in r
                     msg = MIMEMultipart()
                     msg["From"] = smtp_from
                     msg["To"] = test_email
-                    msg["Subject"] = f"Weekly Activity Analysis — Week of {(week_ending_date - timedelta(days=6)).strftime('%b %d')}"
+                    msg["Subject"] = f"Weekly Activity Analysis — Week of {(week_ending_date - timedelta(days=6)).strftime('%b %d')} [{display_name}]"
                     
                     email_body = f"""
 <html>
@@ -2702,15 +2714,17 @@ Keep it under 300 words total. Be analytical about patterns but encouraging in r
         .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px 8px 0 0; }}
         .content {{ padding: 20px; background: #f8f9fa; }}
         .analysis {{ background: white; padding: 20px; border-radius: 6px; border-left: 4px solid #667eea; margin: 15px 0; }}
+        .test-notice {{ background: #fff3cd; padding: 10px; border-radius: 6px; border-left: 4px solid #ffc107; margin: 10px 0; font-size: 14px; }}
         .footer {{ padding: 15px; font-size: 12px; color: #666; background: #e9ecef; border-radius: 0 0 8px 8px; }}
     </style>
 </head>
 <body>
     <div class="header">
         <h2>📊 Weekly Activity Analysis</h2>
-        <p>{actual_rep} • Week of {(week_ending_date - timedelta(days=6)).strftime('%B %d')} - {week_ending_date.strftime('%B %d, %Y')}</p>
+        <p>{display_name} • Week of {(week_ending_date - timedelta(days=6)).strftime('%B %d')} - {week_ending_date.strftime('%B %d, %Y')}</p>
     </div>
     <div class="content">
+        {'<div class="test-notice"><strong>🧪 TEST MODE:</strong> This report analyzes Owen\'s activity data but was sent to you for testing.</div>' if 'Test' in display_name else ''}
         <div class="analysis">
             {ai_analysis.replace(chr(10), '<br>')}
         </div>
