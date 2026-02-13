@@ -2561,14 +2561,20 @@ For Owen Labombard (SDR — newer, needs confidence):
 
 {coaching_voice}
 
+IMPORTANT: Start your response with a brief introduction about who you are:
+"I'm your AI sales coach, designed to help you reflect on your activity and plan ahead. If my recommendations are off, that's expected - I'm a learning model, and my insights will get better the more I learn about you and your data. Daily reports like this are just the beginning; over time, I want to help you with your daily tasks."
+
+Then continue with your analysis:
+
 TONE: Supportive colleague, not a manager. Keep it conversational and encouraging.
 
 FORMAT:
+- Brief AI introduction (2-3 sentences as noted above)
 - 2-3 sentences on today's activity (what they accomplished)
 - 1-2 sentences on weekly patterns/trends you notice
 - 1-2 sentences with tomorrow's suggested focus
 
-Keep it under 150 words total. Be specific about numbers but encouraging in tone. No markdown formatting.""",
+Keep it under 200 words total. Be specific about numbers but encouraging in tone. No markdown formatting.""",
                         messages=[{"role": "user", "content": f"Write a daily activity summary:\\n\\n{daily_context}"}]
                     )
                     
@@ -2680,15 +2686,21 @@ Keep it under 150 words total. Be specific about numbers but encouraging in tone
 
 {coaching_voice}
 
+IMPORTANT: Start your response with a brief introduction about who you are:
+"I'm your AI sales coach, here to help you spot patterns and plan strategically. If my recommendations are off, that's expected - I'm a learning model, and my insights will get better the more I learn about you and your data. Weekly reports like this are just the beginning; over time, I want to help you with your daily tasks."
+
+Then continue with your analysis:
+
 TONE: Insightful coach who spots patterns and provides strategic guidance. Encouraging but analytical.
 
 STRUCTURE:
+- Brief AI introduction (2-3 sentences as noted above)
 - Week Overview (2-3 sentences on activity levels vs previous week/monthly average)
 - Pattern Recognition (2-3 sentences on trends you notice - timing, types of activity, deal engagement)
 - Strategic Insights (2-3 sentences on what the patterns suggest about deal progression or approach)
 - Next Week Focus (2-3 sentences with specific recommendations)
 
-Keep it under 300 words total. Be analytical about patterns but encouraging in recommendations. No markdown formatting.""",
+Keep it under 350 words total. Be analytical about patterns but encouraging in recommendations. No markdown formatting.""",
                         messages=[{"role": "user", "content": f"Write a weekly activity analysis:\\n\\n{weekly_context}"}]
                     )
                     
