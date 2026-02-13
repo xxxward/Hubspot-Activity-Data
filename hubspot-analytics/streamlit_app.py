@@ -4043,46 +4043,48 @@ CREATIVE RE-ENGAGEMENT IDEAS (when deals go quiet):
                 unmatched_cos = unmatched[["company_name", "deal_name", "hubspot_owner_name"]].drop_duplicates() if all(c in unmatched.columns for c in ("company_name", "deal_name", "hubspot_owner_name")) else pd.DataFrame()
                 if not unmatched_cos.empty:
                     st.dataframe(unmatched_cos.head(30), use_container_width=True, hide_index=True)
-def _detect_sequence_emails(email_df):
+# NEW FUNCTION NAME TO AVOID CACHING ISSUES
+
+def _split_sequence_and_personal_emails(email_df):
     """
-    Detect sequence emails using sequence_id column.
-    
-    RULE: If sequence_id has a real value (not <NA>) = sequence email
-          If sequence_id is <NA> or empty = personal email
+    Split emails into sequence vs personal using sequence_id column.
+    NEW FUNCTION NAME to avoid caching.
     """
     if email_df.empty:
         return pd.DataFrame(), pd.DataFrame()
     
+    print("=== NEW SEQUENCE SPLIT FUNCTION CALLED ===")
+    
     email_df = email_df.copy()
     
-    # Find sequence_id column
     if "sequence_id" not in email_df.columns:
-        print(f"DEBUG: No sequence_id column found")
+        print("SPLIT: No sequence_id column found")
         return pd.DataFrame(), email_df.copy()
     
     seq_col = email_df["sequence_id"]
-    print(f"DEBUG: Total emails: {len(email_df)}")
-    print(f"DEBUG: All unique values: {sorted(seq_col.unique(), key=str)}")
+    print(f"SPLIT: Processing {len(email_df)} emails")
+    print(f"SPLIT: Unique sequence_id values: {sorted(seq_col.unique(), key=str)}")
     
-    # Check for REAL sequence values (not <NA>, not empty, not null)
-    has_real_sequence = (
-        seq_col.notna() &  # not pandas null
-        (seq_col != '<NA>') &  # not pandas <NA> string
-        (seq_col.astype(str).str.strip() != '') &  # not empty string
-        (~seq_col.astype(str).str.strip().isin(['nan', 'None', 'null']))  # not other null representations
+    # NEW LOGIC: Only actual sequence IDs (not <NA>) are sequences
+    is_real_sequence = (
+        seq_col.notna() &  # Not null
+        (seq_col != '<NA>') &  # Not pandas <NA>
+        (seq_col.astype(str).str.strip() != '') &  # Not empty
+        (seq_col.astype(str) != 'nan')  # Not string 'nan'
     )
     
-    sequence_emails = email_df[has_real_sequence].copy()
-    personal_emails = email_df[~has_real_sequence].copy()
+    sequence_emails = email_df[is_real_sequence].copy()
+    personal_emails = email_df[~is_real_sequence].copy()
     
-    print(f"DEBUG: FINAL RESULT - {len(sequence_emails)} sequence emails, {len(personal_emails)} personal emails")
+    print(f"SPLIT: RESULT = {len(sequence_emails)} SEQUENCE, {len(personal_emails)} PERSONAL")
     
-    # Show what got categorized where
     if len(sequence_emails) > 0:
-        sample_seq_ids = sequence_emails["sequence_id"].head(3).tolist()
-        print(f"DEBUG: Sample SEQUENCE IDs: {sample_seq_ids}")
+        print(f"SPLIT: Sample sequence IDs: {sequence_emails['sequence_id'].head(3).tolist()}")
     if len(personal_emails) > 0:
-        sample_personal_ids = personal_emails["sequence_id"].head(3).tolist()
-        print(f"DEBUG: Sample PERSONAL IDs: {sample_personal_ids}")
+        print(f"SPLIT: Sample personal IDs: {personal_emails['sequence_id'].head(3).tolist()}")
     
     return sequence_emails, personal_emails
+
+# THEN UPDATE THE EMAIL FILTERING LINE TO:
+# fe = _fdate_raw(_frep(data.emails), "activity_date")
+# fe_sequence, fe_personal = _split_sequence_and_personal_emails(fe)  # NEW NAME!
