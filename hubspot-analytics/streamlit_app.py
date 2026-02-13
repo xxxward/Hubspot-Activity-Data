@@ -444,6 +444,9 @@ def _detect_sequence_emails(email_df):
     """
     Detect sequence/automated emails vs personal emails using Sequence ID column.
     
+    Logic: If "Sequence ID" has a value = sequence email
+           If "Sequence ID" is empty/null = personal email
+    
     Returns tuple of (sequence_emails_df, personal_emails_df)
     """
     if email_df.empty:
@@ -451,33 +454,43 @@ def _detect_sequence_emails(email_df):
     
     email_df = email_df.copy()
     
-    # Check if sequence_id column exists (might be named differently)
+    # Look for the exact "Sequence ID" column
     sequence_col = None
-    for col in email_df.columns:
-        if 'sequence' in col.lower() and 'id' in col.lower():
-            sequence_col = col
-            break
+    if "Sequence ID" in email_df.columns:
+        sequence_col = "Sequence ID"
+    else:
+        # Fallback - look for variations
+        for col in email_df.columns:
+            if col.lower().strip() == "sequence id":
+                sequence_col = col
+                break
     
     if sequence_col is None:
-        # Fallback: if no sequence column found, treat all as personal
+        print(f"DEBUG: 'Sequence ID' column not found!")
+        print(f"DEBUG: Available columns: {list(email_df.columns)}")
+        # No sequence column found - treat all as personal emails
         return pd.DataFrame(), email_df.copy()
     
-    # Simple logic: if sequence_id has a value, it's a sequence email
-    # If sequence_id is null/empty, it's a personal email
-    def _is_sequence_email(row):
-        seq_id = row.get(sequence_col)
-        if pd.isna(seq_id):
-            return False
-        if str(seq_id).strip() == '' or str(seq_id).strip().lower() in ['none', 'null', '0']:
-            return False
-        return True
+    print(f"DEBUG: Found sequence column: '{sequence_col}'")
     
-    # Apply sequence detection
-    email_df['is_sequence'] = email_df.apply(_is_sequence_email, axis=1)
+    # Check what the sequence ID values actually look like
+    seq_values = email_df[sequence_col]
+    print(f"DEBUG: Total emails: {len(email_df)}")
+    print(f"DEBUG: Non-null sequence IDs: {seq_values.notna().sum()}")
+    print(f"DEBUG: Null sequence IDs: {seq_values.isna().sum()}")
+    print(f"DEBUG: Sample sequence ID values (non-null): {seq_values.dropna().head(5).tolist()}")
+    print(f"DEBUG: Unique non-null values count: {seq_values.dropna().nunique()}")
     
-    # Split into sequence and personal
-    sequence_emails = email_df[email_df['is_sequence'] == True].copy()
-    personal_emails = email_df[email_df['is_sequence'] == False].copy()
+    # Simple logic: 
+    # - If sequence_id is not null and not empty = sequence email
+    # - If sequence_id is null or empty = personal email
+    is_sequence_mask = seq_values.notna() & (seq_values.astype(str).str.strip() != '') & (seq_values.astype(str).str.strip() != 'nan')
+    
+    sequence_emails = email_df[is_sequence_mask].copy()
+    personal_emails = email_df[~is_sequence_mask].copy()
+    
+    print(f"DEBUG: Categorized {len(sequence_emails)} as sequence emails")
+    print(f"DEBUG: Categorized {len(personal_emails)} as personal emails")
     
     return sequence_emails, personal_emails
 
