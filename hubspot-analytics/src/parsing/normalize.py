@@ -37,6 +37,7 @@ COLUMN_ALIASES: dict[str, str] = {
     "opp_owner": "hubspot_owner_name",
     "opp_type_no_blanks": "opp_type",
     "is_deal_closed?": "is_deal_closed",
+    "close_status": "close_status",
     # Meetings
     "activity_assigned_to": "activity_assigned_to",
     "activity_created_by": "activity_created_by",
