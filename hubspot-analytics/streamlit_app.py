@@ -1513,7 +1513,7 @@ elif st.session_state.page == "emails":
             email_by_rep = email_by_rep.sort_values("email_count", ascending=False)
             
             if not email_by_rep.empty:
-                section_header("👤", "Emails by Rep", C["blue"])
+                section_header("👤", "Emails by Rep", C["emails"])
                 
                 # Create chart
                 fig = px.bar(email_by_rep.head(10), x="hubspot_owner_name", y="email_count", 
@@ -1524,7 +1524,7 @@ elif st.session_state.page == "emails":
 
         # Email timeline
         if "activity_date" in fe.columns:
-            section_header("📈", "Email Timeline", C["violet"])
+            section_header("📈", "Email Timeline", C["emails"])
             
             fe_dated = fe.copy()
             fe_dated["activity_date"] = pd.to_datetime(fe_dated["activity_date"], errors="coerce")
@@ -1537,14 +1537,14 @@ elif st.session_state.page == "emails":
                 
                 fig_timeline = px.line(daily_emails, x="date", y="email_count",
                                      title="Daily Email Activity", markers=True)
-                fig_timeline.update_traces(line_color="#818cf8", marker_color="#818cf8")
+                fig_timeline.update_traces(line_color="#c084fc", marker_color="#c084fc")
                 styled_fig(fig_timeline, 400)
                 st.plotly_chart(fig_timeline, use_container_width=True)
 
         section_divider()
 
         # Email data table
-        section_header("📋", "Email Details", C["notes"])
+        section_header("📋", "Email Details", C["emails"])
         
         # Select relevant columns for display
         email_cols = [c for c in ("activity_date", "hubspot_owner_name", "email_subject", "email_from_address", 
