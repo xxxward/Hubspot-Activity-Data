@@ -440,92 +440,6 @@ def styled_fig(fig, height=340):
     return fig
 
 
-def _detect_sequence_emails(email_df):
-    """
-    Detect sequence/automated emails vs personal emails using sequence_id column.
-    
-    Logic: If 'sequence_id' has a value = sequence email
-           If 'sequence_id' is empty/null = personal email
-    
-    Returns tuple of (sequence_emails_df, personal_emails_df)
-    """
-    if email_df.empty:
-        return pd.DataFrame(), pd.DataFrame()
-    
-    email_df = email_df.copy()
-    
-    # Look for the sequence_id column (from the logs, it's lowercase)
-    sequence_col = None
-    if "sequence_id" in email_df.columns:
-        sequence_col = "sequence_id"
-    elif "Sequence ID" in email_df.columns:
-        sequence_col = "Sequence ID"
-    else:
-        # Fallback - look for variations
-        for col in email_df.columns:
-            if 'sequence' in col.lower() and 'id' in col.lower():
-                sequence_col = col
-                break
-    
-    if sequence_col is None:
-        print(f"DEBUG: No sequence ID column found!")
-        print(f"DEBUG: Available columns: {list(email_df.columns)}")
-        # No sequence column found - treat all as personal emails
-        return pd.DataFrame(), email_df.copy()
-    
-    print(f"DEBUG: Found sequence column: '{sequence_col}'")
-    
-    # Check what the sequence ID values actually look like
-    seq_values = email_df[sequence_col]
-    print(f"DEBUG: Total emails: {len(email_df)}")
-    print(f"DEBUG: Data type: {seq_values.dtype}")
-    print(f"DEBUG: Non-null sequence IDs: {seq_values.notna().sum()}")
-    print(f"DEBUG: Null sequence IDs: {seq_values.isna().sum()}")
-    
-    # Show ALL unique values to see what we're dealing with
-    print(f"DEBUG: All unique values: {sorted(seq_values.unique(), key=lambda x: str(x))}")
-    
-    # Show sample values (being careful about data types)
-    non_null_samples = seq_values.dropna()
-    if len(non_null_samples) > 0:
-        print(f"DEBUG: Sample sequence ID values (non-null): {non_null_samples.head(10).tolist()}")
-        print(f"DEBUG: Unique non-null values count: {non_null_samples.nunique()}")
-    else:
-        print(f"DEBUG: No non-null sequence ID values found")
-    
-    # Very explicit logic with debugging
-    print(f"DEBUG: Checking each condition...")
-    
-    # Check for actual null values
-    is_null = seq_values.isna()
-    print(f"DEBUG: Null values: {is_null.sum()}")
-    
-    # Check for empty strings if object type
-    is_empty_string = pd.Series([False] * len(seq_values), index=seq_values.index)
-    if seq_values.dtype == 'object':
-        is_empty_string = seq_values.astype(str).str.strip().isin(['', 'nan', 'None', 'null', 'NaN'])
-        print(f"DEBUG: Empty strings: {is_empty_string.sum()}")
-    
-    # Combine conditions: sequence email = NOT null AND NOT empty string
-    is_sequence_mask = ~is_null & ~is_empty_string
-    
-    print(f"DEBUG: Final sequence mask - True count: {is_sequence_mask.sum()}")
-    print(f"DEBUG: Final sequence mask - False count: {(~is_sequence_mask).sum()}")
-    
-    sequence_emails = email_df[is_sequence_mask].copy()
-    personal_emails = email_df[~is_sequence_mask].copy()
-    
-    print(f"DEBUG: FINAL RESULT - {len(sequence_emails)} sequence emails, {len(personal_emails)} personal emails")
-    
-    # Show a few examples of what was categorized as what
-    if len(sequence_emails) > 0:
-        print(f"DEBUG: Sample sequence emails sequence_ids: {sequence_emails[sequence_col].head(3).tolist()}")
-    if len(personal_emails) > 0:
-        print(f"DEBUG: Sample personal emails sequence_ids: {personal_emails[sequence_col].head(3).tolist()}")
-    
-    return sequence_emails, personal_emails
-
-
 # ── Color map (consistent everywhere) ──────────────────────────────────
 C = {
     "meetings": "#f472b6", "calls": "#818cf8", "emails": "#c084fc",
@@ -807,10 +721,6 @@ def empty_state(msg="Nothing here yet — check your date range? 🤔"):
 fm = _fdate_raw(_frep(data.meetings), "meeting_start_time")
 fc = _fdate_raw(_frep(data.calls), "activity_date")
 fe = _fdate_raw(_frep(data.emails), "activity_date")
-
-# Split emails into sequence and personal
-fe_sequence, fe_personal = _detect_sequence_emails(fe)
-
 fn = _fdate_raw(_frep(data.notes), "activity_date")
 fk = _fdate_raw(_frep(data.tickets), "created_date")
 
@@ -830,7 +740,7 @@ if not ft_all.empty:
 else:
     ft = ft_all
 
-total_activities = len(fm) + len(fc) + len(ft) + len(fe_personal) + len(fe_sequence) + len(fn) + len(fk)
+total_activities = len(fm) + len(fc) + len(ft) + len(fe) + len(fn) + len(fk)
 
 # ── Data Diagnostics (toggle in sidebar) ──
 with st.sidebar.expander("🔧 Debug: Date Diagnostics"):
@@ -948,19 +858,19 @@ AI_MODEL_SMART = "claude-sonnet-4-20250514"    # For single-deal coaching
 # ── Role-Based Activity Weights ──
 ROLE_WEIGHTS = {
     "sdr": {
-        "meetings": 8, "calls": 1, "emails": 0.5, "sequence_emails": 0.2,
+        "meetings": 8, "calls": 1, "emails": 0.5,
         "completed_tasks": 2, "overdue_tasks": -3, "tickets": 1, "notes": 0.5,
     },
     "acquisition": {
-        "meetings": 6, "calls": 3, "emails": 1, "sequence_emails": 0.4,
+        "meetings": 6, "calls": 3, "emails": 1,
         "completed_tasks": 3, "overdue_tasks": -5, "tickets": 2, "notes": 1,
     },
     "am": {
-        "meetings": 10, "calls": 4, "emails": 1.5, "sequence_emails": 0.6,
+        "meetings": 10, "calls": 4, "emails": 1.5,
         "completed_tasks": 3, "overdue_tasks": -5, "tickets": 3, "notes": 1.5,
     },
     "ceo": {
-        "meetings": 5, "calls": 2, "emails": 1, "sequence_emails": 0.4,
+        "meetings": 5, "calls": 2, "emails": 1,
         "completed_tasks": 1, "overdue_tasks": -1, "tickets": 1, "notes": 0.5,
     },
 }
@@ -1065,24 +975,20 @@ def build_leaderboard():
         # Get per-rep filtered DataFrames
         rm = fm[fm["hubspot_owner_name"] == rep] if not fm.empty and "hubspot_owner_name" in fm.columns else pd.DataFrame()
         rc = fc[fc["hubspot_owner_name"] == rep] if not fc.empty and "hubspot_owner_name" in fc.columns else pd.DataFrame()
-        re_personal = fe_personal[fe_personal["hubspot_owner_name"] == rep] if not fe_personal.empty and "hubspot_owner_name" in fe_personal.columns else pd.DataFrame()
-        re_sequence = fe_sequence[fe_sequence["hubspot_owner_name"] == rep] if not fe_sequence.empty and "hubspot_owner_name" in fe_sequence.columns else pd.DataFrame()
+        re_ = fe[fe["hubspot_owner_name"] == rep] if not fe.empty and "hubspot_owner_name" in fe.columns else pd.DataFrame()
         rn = fn[fn["hubspot_owner_name"] == rep] if not fn.empty and "hubspot_owner_name" in fn.columns else pd.DataFrame()
         rk = fk[fk["hubspot_owner_name"] == rep] if not fk.empty and "hubspot_owner_name" in fk.columns else pd.DataFrame()
 
         m = len(rm)
         c = len(rc)
-        e_personal = len(re_personal)
-        e_sequence = len(re_sequence)
-        e_total = e_personal + e_sequence  # For display
+        e = len(re_)
         n = len(rn)
         k = len(rk)
 
         # Deal-tier weighted counts
         m_w = _deal_tier_multiplier(rm) if not rm.empty else 0
         c_w = _deal_tier_multiplier(rc) if not rc.empty else 0
-        e_personal_w = _deal_tier_multiplier(re_personal) if not re_personal.empty else 0
-        e_sequence_w = _deal_tier_multiplier(re_sequence) if not re_sequence.empty else 0
+        e_w = _deal_tier_multiplier(re_) if not re_.empty else 0
         n_w = _deal_tier_multiplier(rn) if not rn.empty else 0
         k_w = _deal_tier_multiplier(rk) if not rk.empty else 0
 
@@ -1102,8 +1008,7 @@ def build_leaderboard():
         base_score = (
             m_w * weights["meetings"] +
             c_w * weights["calls"] +
-            e_personal_w * weights["emails"] +
-            e_sequence_w * weights["sequence_emails"] +
+            e_w * weights["emails"] +
             comp * weights["completed_tasks"] +
             over * weights["overdue_tasks"] +
             k_w * weights["tickets"] +
@@ -1132,8 +1037,7 @@ def build_leaderboard():
             level = "cold"
 
         rows.append({
-            "Rep": rep, "Role": role, "Meetings": m, "Calls": c, 
-            "Personal Emails": e_personal, "Sequence Emails": e_sequence,
+            "Rep": rep, "Role": role, "Meetings": m, "Calls": c, "Emails": e,
             "Tasks": comp, "Overdue": over, "Notes": n, "Tickets": k,
             "Base Score": round(base_score, 1), "Streak": streak,
             "WoW": f"{'▲' if wow > 1 else '▼' if wow < 1 else '—'} {abs(wow - 1) * 100:.0f}%",
@@ -1178,8 +1082,7 @@ if st.session_state.page == "command":
         ("Total Activities", f"{total_activities:,}", "gradient"),
         ("Meetings", f"{len(fm):,}", "pink"),
         ("Calls", f"{len(fc):,}", "blue"),
-        ("Personal Emails", f"{len(fe_personal):,}", "purple"),
-        ("Sequence Emails", f"{len(fe_sequence):,}", "cyan"),
+        ("Emails", f"{len(fe):,}", "purple"),
         ("Tasks", f"{len(ft):,}", "amber"),
         ("Notes", f"{len(fn):,}", "violet"),
         ("Tickets", f"{len(fk):,}", "red"),
@@ -1210,7 +1113,7 @@ if st.session_state.page == "command":
             # Role labels
             lb_display["Role "] = lb_display["Role"].map(ROLE_LABELS)
 
-            show_cols = ["Rank", "Rep", "Role ", "Meetings", "Calls", "Personal Emails", "Sequence Emails", "Tasks",
+            show_cols = ["Rank", "Rep", "Role ", "Meetings", "Calls", "Emails", "Tasks",
                          "Overdue", "Streak 🔥", "WoW", "Score", "Level "]
             show_cols = [c for c in show_cols if c in lb_display.columns]
             st.dataframe(lb_display[show_cols], use_container_width=True, hide_index=True,
@@ -1224,8 +1127,8 @@ if st.session_state.page == "command":
     with col_mix:
         section_header("🍩", "Activity Mix", C["emails"])
         mix_data = pd.DataFrame({
-            "Type": ["Meetings", "Calls", "Personal Emails", "Sequence Emails", "Tasks", "Tickets", "Notes"],
-            "Count": [len(fm), len(fc), len(fe_personal), len(fe_sequence), len(ft), len(fk), len(fn)],
+            "Type": ["Meetings", "Calls", "Emails", "Tasks", "Tickets", "Notes"],
+            "Count": [len(fm), len(fc), len(fe), len(ft), len(fk), len(fn)],
         })
         mix_data = mix_data[mix_data["Count"] > 0]
         if not mix_data.empty:
@@ -1233,8 +1136,7 @@ if st.session_state.page == "command":
                 mix_data, names="Type", values="Count", hole=0.55,
                 color="Type",
                 color_discrete_map={
-                    "Meetings": C["meetings"], "Calls": C["calls"], 
-                    "Personal Emails": C["emails"], "Sequence Emails": C["gong"],
+                    "Meetings": C["meetings"], "Calls": C["calls"], "Emails": C["emails"],
                     "Tasks": C["tasks"], "Tickets": C["tickets"], "Notes": C["notes"],
                 },
             )
@@ -1341,7 +1243,7 @@ if st.session_state.page == "command":
             role = r["Role"]
             initials = "".join([w[0] for w in rep.split()[:2]]).upper()
             color = rep_colors.get(role, "#a78bfa")
-            total_rep = r["Meetings"] + r["Calls"] + r["Personal Emails"] + r["Sequence Emails"] + r["Tasks"] + r["Notes"] + r["Tickets"]
+            total_rep = r["Meetings"] + r["Calls"] + r["Emails"] + r["Tasks"] + r["Notes"] + r["Tickets"]
             level_text, level_cls = SCORE_LEVELS.get(r["Level"], ("", ""))
             role_label = ROLE_LABELS.get(role, "")
             streak = r.get("Streak", 0)
@@ -1383,7 +1285,7 @@ if st.session_state.page == "command":
                         </div>
                     </div>
                     <div class="rep-stats">
-                        {r['Meetings']} mtgs · {r['Calls']} calls · {r['Personal Emails']} emails · {r['Sequence Emails']} seq<br>
+                        {r['Meetings']} mtgs · {r['Calls']} calls · {r['Emails']} emails<br>
                         {r['Tasks']} tasks · {r['Overdue']} overdue · {total_rep} total
                     </div>
                     <div style="display:flex;align-items:baseline;gap:8px;margin-top:10px;">
@@ -4043,48 +3945,3 @@ CREATIVE RE-ENGAGEMENT IDEAS (when deals go quiet):
                 unmatched_cos = unmatched[["company_name", "deal_name", "hubspot_owner_name"]].drop_duplicates() if all(c in unmatched.columns for c in ("company_name", "deal_name", "hubspot_owner_name")) else pd.DataFrame()
                 if not unmatched_cos.empty:
                     st.dataframe(unmatched_cos.head(30), use_container_width=True, hide_index=True)
-# NEW FUNCTION NAME TO AVOID CACHING ISSUES
-
-def _split_sequence_and_personal_emails(email_df):
-    """
-    Split emails into sequence vs personal using sequence_id column.
-    NEW FUNCTION NAME to avoid caching.
-    """
-    if email_df.empty:
-        return pd.DataFrame(), pd.DataFrame()
-    
-    print("=== NEW SEQUENCE SPLIT FUNCTION CALLED ===")
-    
-    email_df = email_df.copy()
-    
-    if "sequence_id" not in email_df.columns:
-        print("SPLIT: No sequence_id column found")
-        return pd.DataFrame(), email_df.copy()
-    
-    seq_col = email_df["sequence_id"]
-    print(f"SPLIT: Processing {len(email_df)} emails")
-    print(f"SPLIT: Unique sequence_id values: {sorted(seq_col.unique(), key=str)}")
-    
-    # NEW LOGIC: Only actual sequence IDs (not <NA>) are sequences
-    is_real_sequence = (
-        seq_col.notna() &  # Not null
-        (seq_col != '<NA>') &  # Not pandas <NA>
-        (seq_col.astype(str).str.strip() != '') &  # Not empty
-        (seq_col.astype(str) != 'nan')  # Not string 'nan'
-    )
-    
-    sequence_emails = email_df[is_real_sequence].copy()
-    personal_emails = email_df[~is_real_sequence].copy()
-    
-    print(f"SPLIT: RESULT = {len(sequence_emails)} SEQUENCE, {len(personal_emails)} PERSONAL")
-    
-    if len(sequence_emails) > 0:
-        print(f"SPLIT: Sample sequence IDs: {sequence_emails['sequence_id'].head(3).tolist()}")
-    if len(personal_emails) > 0:
-        print(f"SPLIT: Sample personal IDs: {personal_emails['sequence_id'].head(3).tolist()}")
-    
-    return sequence_emails, personal_emails
-
-# THEN UPDATE THE EMAIL FILTERING LINE TO:
-# fe = _fdate_raw(_frep(data.emails), "activity_date")
-# fe_sequence, fe_personal = _split_sequence_and_personal_emails(fe)  # NEW NAME!
