@@ -567,13 +567,44 @@ _default_start = date.today() - timedelta(days=7)
 st.markdown('<div class="filter-spacer"></div>', unsafe_allow_html=True)
 with st.expander("🔎 Filters", expanded=False):
     # Quick-select chips
-    chip_col, _, _ = st.columns([3, 1, 1])
+    # ── PERSISTENT FILTER INITIALIZATION ──
+    # Initialize persistent filters in session state if they don't exist
+    if "persistent_reps" not in st.session_state:
+        st.session_state.persistent_reps = REPS_IN_SCOPE
+    if "persistent_pipelines" not in st.session_state:
+        st.session_state.persistent_pipelines = PIPELINES_IN_SCOPE
+    if "persistent_close_status" not in st.session_state:
+        st.session_state.persistent_close_status = CLOSE_STATUS_OPTIONS
+    if "persistent_quick_filter" not in st.session_state:
+        st.session_state.persistent_quick_filter = 1  # Default to "7d" (index 1)
+    if "persistent_custom_date" not in st.session_state:
+        st.session_state.persistent_custom_date = (_default_start, today)
+
+    chip_col, reset_col, info_col = st.columns([3, 1, 1])
     with chip_col:
+        # Quick date filter with persistent state
         quick = st.radio(
             "Quick range",
             ["Today", "7d", "30d", "90d", "This Quarter", "This Year", "All Time", "Custom"],
-            horizontal=True, index=1, label_visibility="collapsed",
+            horizontal=True, 
+            index=st.session_state.persistent_quick_filter,
+            label_visibility="collapsed",
+            key="quick_filter_persistent"
         )
+        # Update session state
+        new_index = ["Today", "7d", "30d", "90d", "This Quarter", "This Year", "All Time", "Custom"].index(quick)
+        st.session_state.persistent_quick_filter = new_index
+        
+    with reset_col:
+        # Reset filters button
+        if st.button("🔄 Reset All", help="Reset all filters to default"):
+            st.session_state.persistent_reps = REPS_IN_SCOPE
+            st.session_state.persistent_pipelines = PIPELINES_IN_SCOPE
+            st.session_state.persistent_close_status = CLOSE_STATUS_OPTIONS
+            st.session_state.persistent_quick_filter = 1
+            st.session_state.persistent_custom_date = (_default_start, today)
+            st.rerun()
+    
     today = datetime.now(LOCAL_TZ).date()
     if quick == "Today":
         start_date, end_date = today, today
@@ -592,24 +623,61 @@ with st.expander("🔎 Filters", expanded=False):
     elif quick == "All Time":
         start_date, end_date = date(2020, 1, 1), today
     else:
-        date_range = st.date_input("📅 Date Range", value=(_default_start, today), max_value=today)
+        # Custom date range (persistent)
+        date_range = st.date_input(
+            "📅 Custom Date Range", 
+            value=st.session_state.persistent_custom_date, 
+            max_value=today,
+            key="custom_date_persistent"
+        )
+        st.session_state.persistent_custom_date = date_range
         start_date, end_date = (date_range if isinstance(date_range, tuple) and len(date_range) == 2 else (_default_start, today))
 
+    # Persistent filter controls
     fc1, fc2, fc3, fc4 = st.columns([2, 2, 2, 1])
+    
     with fc1:
-        selected_reps = st.multiselect("👤 Sales Reps", REPS_IN_SCOPE, default=REPS_IN_SCOPE)
+        selected_reps = st.multiselect(
+            "👤 Sales Reps", 
+            REPS_IN_SCOPE, 
+            default=st.session_state.persistent_reps,
+            key="reps_persistent"
+        )
+        # Update session state when selection changes
+        if selected_reps != st.session_state.persistent_reps:
+            st.session_state.persistent_reps = selected_reps
+        
     with fc2:
         if st.session_state.page == "deals":
-            selected_pipelines = st.multiselect("🔀 Pipelines", PIPELINES_IN_SCOPE, default=PIPELINES_IN_SCOPE)
+            selected_pipelines = st.multiselect(
+                "🔀 Pipelines", 
+                PIPELINES_IN_SCOPE, 
+                default=st.session_state.persistent_pipelines,
+                key="pipelines_persistent"
+            )
+            # Update session state
+            if selected_pipelines != st.session_state.persistent_pipelines:
+                st.session_state.persistent_pipelines = selected_pipelines
         else:
-            selected_pipelines = PIPELINES_IN_SCOPE
+            selected_pipelines = st.session_state.persistent_pipelines
+            
     with fc3:
         if st.session_state.page == "deals":
-            selected_close_status = st.multiselect("📊 Close Status", CLOSE_STATUS_OPTIONS, default=CLOSE_STATUS_OPTIONS)
+            selected_close_status = st.multiselect(
+                "📊 Close Status", 
+                CLOSE_STATUS_OPTIONS, 
+                default=st.session_state.persistent_close_status,
+                key="close_status_persistent"
+            )
+            # Update session state
+            if selected_close_status != st.session_state.persistent_close_status:
+                st.session_state.persistent_close_status = selected_close_status
         else:
-            selected_close_status = CLOSE_STATUS_OPTIONS
+            selected_close_status = st.session_state.persistent_close_status
+            
     with fc4:
         st.markdown("<br>", unsafe_allow_html=True)
+        # Filter indicator
         is_filtered = (len(selected_reps) < len(REPS_IN_SCOPE)) or (len(selected_pipelines) < len(PIPELINES_IN_SCOPE)) or (len(selected_close_status) < len(CLOSE_STATUS_OPTIONS)) or quick != "7d"
         if is_filtered:
             st.markdown('<span class="filter-indicator">⚡ Filters active</span>', unsafe_allow_html=True)
