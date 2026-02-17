@@ -967,7 +967,7 @@ def _count_new_sals_by_period(new_pipeline_df, rep_name=None):
     """
     Count new deals created by time periods - Leading indicator for pipeline health
     """
-    if new_pipeline_df.empty or "create_date" not in new_pipeline_df.columns:
+    if new_pipeline_df.empty or "created_date" not in new_pipeline_df.columns:
         return {"this_week": 0, "last_week": 0, "this_month": 0, "this_quarter": 0}
     
     # Filter by rep if specified  
@@ -992,7 +992,7 @@ def _count_new_sals_by_period(new_pipeline_df, rep_name=None):
         return {"this_week": 0, "last_week": 0, "this_month": 0, "this_quarter": 0}
     
     # Parse create dates
-    created_dates = pd.to_datetime(df["create_date"], errors="coerce")
+    created_dates = pd.to_datetime(df["created_date"], errors="coerce")
     df = df[created_dates.notna()]
     created_dates = created_dates.dropna()
     
@@ -1032,18 +1032,18 @@ def _count_new_sals_by_period(new_pipeline_df, rep_name=None):
 
 def _get_new_pipeline_trend(new_pipeline_df, days=30):
     """Get daily new pipeline creation trend"""
-    if new_pipeline_df.empty or "create_date" not in new_pipeline_df.columns:
+    if new_pipeline_df.empty or "created_date" not in new_pipeline_df.columns:
         return pd.DataFrame()
     
     df = new_pipeline_df.copy()
-    created_dates = pd.to_datetime(df["create_date"], errors="coerce")
+    created_dates = pd.to_datetime(df["created_date"], errors="coerce")
     df = df[created_dates.notna()]
     
     if df.empty:
         return pd.DataFrame()
     
     # Count deals by date
-    df["create_date_only"] = pd.to_datetime(df["create_date"]).dt.date
+    df["created_date_only"] = pd.to_datetime(df["created_date"]).dt.date
     daily_counts = df["create_date_only"].value_counts().reset_index()
     daily_counts.columns = ["Date", "New Deals"]
     
@@ -1366,13 +1366,6 @@ if st.session_state.page == "command":
         section_header("📈", "New Pipeline Creation Tracking", C["score"])
         st.markdown("**Leading indicators that predict sales success • Weekly targets for pipeline generation**")
         
-        # DEBUG: Show new pipeline data info
-        st.write(f"DEBUG: New Pipeline data loaded: {len(data.new_pipeline)} rows")
-        if not data.new_pipeline.empty:
-            st.write("DEBUG: Columns:", list(data.new_pipeline.columns))
-            st.write("DEBUG: Sample data:")
-            st.dataframe(data.new_pipeline.head(3))
-        
         # Build KPI scorecard
         kpi_data = []
         
@@ -1437,10 +1430,10 @@ if st.session_state.page == "command":
         
         if kpi_data:
             kpi_df = pd.DataFrame(kpi_data)
-            kip_df = kpi_df.sort_values("_score", ascending=False)  # Fixed typo here
+            kpi_df = kpi_df.sort_values("_score", ascending=False)
             
             # Add performance indicators
-            kip_df["Performance"] = kip_df["_score"].apply(lambda x: 
+            kpi_df["Performance"] = kpi_df["_score"].apply(lambda x: 
                 "🔥 Crushing It" if x >= 85 else
                 "✅ On Track" if x >= 70 else  
                 "⚡ Push Needed" if x >= 50 else
@@ -1450,7 +1443,7 @@ if st.session_state.page == "command":
             # Show the scorecard
             display_cols = ["Rep", "Role", "New SALs", "Contacts", "Meetings", "Tickets", "KPI Score", "Performance"]
             st.dataframe(
-                kip_df[display_cols],
+                kpi_df[display_cols],
                 use_container_width=True,
                 hide_index=True,
                 column_config={
@@ -1495,7 +1488,7 @@ if st.session_state.page == "command":
             
             with col1:
                 st.markdown("**📅 This Week**")
-                week_data = [(row["Rep"], row["New SALs"]) for _, row in kip_df.iterrows()]
+                week_data = [(row["Rep"], row["New Deals"]) for _, row in kpi_df.iterrows()]
                 week_data.sort(key=lambda x: x[1], reverse=True)
                 for i, (rep, count) in enumerate(week_data[:5]):
                     medal = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else f"{i+1}."
@@ -1503,7 +1496,7 @@ if st.session_state.page == "command":
             
             with col2:
                 st.markdown("**📆 This Month**")
-                month_data = [(row["Rep"], row["This Month"]) for _, row in kip_df.iterrows()]
+                month_data = [(row["Rep"], row["This Month"]) for _, row in kpi_df.iterrows()]
                 month_data.sort(key=lambda x: x[1], reverse=True)
                 for i, (rep, count) in enumerate(month_data[:5]):
                     medal = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else f"{i+1}."
