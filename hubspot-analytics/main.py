@@ -33,6 +33,7 @@ class AnalyticsData:
     calls: pd.DataFrame = field(default_factory=pd.DataFrame)
     emails: pd.DataFrame = field(default_factory=pd.DataFrame)
     notes: pd.DataFrame = field(default_factory=pd.DataFrame)
+    new_pipeline: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     # Activity counts
     activity_counts_daily: pd.DataFrame = field(default_factory=pd.DataFrame)
@@ -83,7 +84,7 @@ def load_all() -> AnalyticsData:
 
     # 4 - Apply owner mapping per tab type
     logger.info("Applying owner mappings...")
-    for tab_type in ("deals", "meetings", "calls", "tasks", "tickets", "emails", "notes"):
+    for tab_type in ("deals", "meetings", "calls", "tasks", "tickets", "emails", "notes", "new_pipeline"):
         if tab_type in norm and not norm[tab_type].empty:
             norm[tab_type] = apply_owner_mapping(norm[tab_type], uid_map, tab_type)
 
@@ -106,6 +107,7 @@ def load_all() -> AnalyticsData:
     emails = apply_activity_filters(norm.get("emails", pd.DataFrame()))
     notes = apply_activity_filters(norm.get("notes", pd.DataFrame()))
     tickets = norm.get("tickets", pd.DataFrame())
+    new_pipeline = apply_activity_filters(norm.get("new_pipeline", pd.DataFrame()))
 
     # 7 - Metrics
     logger.info("Computing activity metrics...")
@@ -123,7 +125,7 @@ def load_all() -> AnalyticsData:
     term = terminal_summary(deals)
 
     data = AnalyticsData(
-        deals=deals, meetings=meetings, tasks=tasks, tickets=tickets, calls=calls, emails=emails, notes=notes,
+        deals=deals, meetings=meetings, tasks=tasks, tickets=tickets, calls=calls, emails=emails, notes=notes, new_pipeline=new_pipeline,
         activity_counts_daily=activity.get("activity_counts_daily", pd.DataFrame()),
         activity_counts_weekly=weekly,
         activity_counts_monthly=activity.get("activity_counts_monthly", pd.DataFrame()),
