@@ -1464,8 +1464,8 @@ if st.session_state.page == "command":
                 fig = px.line(
                     trend_data,
                     x="Date", 
-                    y="New SALs",
-                    title="Daily New SAL Creation (Last 30 Days)",
+                    y="New Deals",
+                    title="Daily New Pipeline Creation (Last 30 Days)",
                     markers=True
                 )
                 fig.update_traces(line_color=C["active"], marker_color=C["active"])
@@ -1473,9 +1473,9 @@ if st.session_state.page == "command":
                 st.plotly_chart(fig, use_container_width=True)
                 
                 # Summary stats
-                total_month = trend_data["New SALs"].sum()
-                avg_daily = trend_data["New SALs"].mean()
-                st.markdown(f"**📊 30-Day Summary**: {total_month} total SALs created • {avg_daily:.1f} average per day")
+                total_month = trend_data["New Deals"].sum()
+                avg_daily = trend_data["New Deals"].mean()
+                st.markdown(f"**📊 30-Day Summary**: {total_month} total deals created • {avg_daily:.1f} average per day")
             else:
                 empty_state("No new pipeline data available")
                 
