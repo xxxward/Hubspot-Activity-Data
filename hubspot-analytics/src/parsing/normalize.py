@@ -269,6 +269,50 @@ def _best_value(values: list[str]) -> str:
     return max(non_empty, key=len) if non_empty else ""
 
 
+def _merge_meeting_group(group_df: pd.DataFrame, name_col: str, outcome_col: str, company_col: str) -> dict:
+    """
+    Merge a group of duplicate meetings into a single representative record.
+    Takes the best/richest data from each meeting in the group.
+    """
+    if group_df.empty:
+        return {}
+    
+    # Start with the first row as base
+    merged = group_df.iloc[0].to_dict()
+    
+    # For key fields, take the best value across all duplicates
+    if name_col in group_df.columns:
+        names = [_safe_str(val) for val in group_df[name_col]]
+        merged[name_col] = _best_value(names)
+    
+    if company_col in group_df.columns:
+        companies = [_safe_str(val) for val in group_df[company_col]]
+        merged[company_col] = _best_value(companies)
+    
+    # For outcome, take the one with highest priority
+    if outcome_col in group_df.columns:
+        outcomes = group_df[outcome_col].fillna("").astype(str)
+        best_outcome = ""
+        best_priority = -1
+        
+        for outcome in outcomes:
+            priority = OUTCOME_PRIORITY.get(outcome, 0)
+            if priority > best_priority:
+                best_priority = priority
+                best_outcome = outcome
+        
+        merged[outcome_col] = best_outcome
+    
+    # For other important fields, prefer non-empty values
+    important_fields = ['meeting_type', 'body_preview', 'associated_company_name']
+    for field in important_fields:
+        if field in group_df.columns:
+            values = [_safe_str(val) for val in group_df[field]]
+            merged[field] = _best_value(values)
+    
+    return merged
+
+
 def deduplicate_meetings(df: pd.DataFrame) -> pd.DataFrame:
     """
     Deduplicate meetings using the three-pattern algorithm:
