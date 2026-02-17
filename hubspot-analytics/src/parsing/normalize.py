@@ -249,8 +249,13 @@ OUTCOME_PRIORITY = {
 
 
 def _norm_meeting_name(name: str) -> str:
-    """Strip [Gong] and Google Meet: prefixes."""
+    """Strip [Gong] and Google Meet: prefixes, and handle <NA> values."""
     n = str(name).strip() if pd.notna(name) else ""
+    
+    # Convert <NA> to empty string
+    if n == "<NA>":
+        return ""
+        
     for prefix in ["[Gong] ", "[Gong]", "Google Meet: ", "Google Meet:"]:
         if n.startswith(prefix):
             n = n[len(prefix):]
