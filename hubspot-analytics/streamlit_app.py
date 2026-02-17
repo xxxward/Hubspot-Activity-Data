@@ -967,7 +967,17 @@ def _count_new_sals_by_period(new_pipeline_df, rep_name=None):
     """
     Count new deals created by time periods - Leading indicator for pipeline health
     """
-    if new_pipeline_df.empty or "created_date" not in new_pipeline_df.columns:
+    if new_pipeline_df.empty:
+        return {"this_week": 0, "last_week": 0, "this_month": 0, "this_quarter": 0}
+        
+    # Check for column existence - handle both normalized and raw column names
+    date_col = None
+    if "created_date" in new_pipeline_df.columns:
+        date_col = "created_date"
+    elif "Create Date" in new_pipeline_df.columns:  # Actual CSV column name
+        date_col = "Create Date"
+    
+    if not date_col:
         return {"this_week": 0, "last_week": 0, "this_month": 0, "this_quarter": 0}
     
     # Filter by rep if specified  
@@ -991,8 +1001,14 @@ def _count_new_sals_by_period(new_pipeline_df, rep_name=None):
     if df.empty:
         return {"this_week": 0, "last_week": 0, "this_month": 0, "this_quarter": 0}
     
-    # Parse create dates
-    created_dates = pd.to_datetime(df["created_date"], errors="coerce")
+    # Parse create dates - handle both date and datetime formats
+    if 'created_date' in df.columns:
+        created_dates = pd.to_datetime(df["created_date"], errors="coerce")
+    elif 'Create Date' in df.columns:  # Handle the actual CSV column name
+        created_dates = pd.to_datetime(df["Create Date"], errors="coerce")
+    else:
+        return {"this_week": 0, "last_week": 0, "this_month": 0, "this_quarter": 0}
+        
     df = df[created_dates.notna()]
     created_dates = created_dates.dropna()
     
@@ -1032,18 +1048,29 @@ def _count_new_sals_by_period(new_pipeline_df, rep_name=None):
 
 def _get_new_pipeline_trend(new_pipeline_df, days=30):
     """Get daily new pipeline creation trend"""
-    if new_pipeline_df.empty or "created_date" not in new_pipeline_df.columns:
+    if new_pipeline_df.empty:
         return pd.DataFrame()
-    
+        
     df = new_pipeline_df.copy()
-    created_dates = pd.to_datetime(df["created_date"], errors="coerce")
+    
+    # Handle different column name formats
+    date_col = None
+    if "created_date" in df.columns:
+        date_col = "created_date"
+    elif "Create Date" in df.columns:  # Actual CSV column name
+        date_col = "Create Date"
+    
+    if not date_col:
+        return pd.DataFrame()
+        
+    created_dates = pd.to_datetime(df[date_col], errors="coerce")
     df = df[created_dates.notna()]
     
     if df.empty:
         return pd.DataFrame()
     
     # Count deals by date
-    df["created_date_only"] = pd.to_datetime(df["created_date"]).dt.date
+    df["created_date_only"] = pd.to_datetime(df[date_col]).dt.date
     daily_counts = df["created_date_only"].value_counts().reset_index()
     daily_counts.columns = ["Date", "New Deals"]
     
