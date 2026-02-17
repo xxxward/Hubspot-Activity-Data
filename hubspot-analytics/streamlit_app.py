@@ -1,4 +1,4 @@
-"""
+v"""
 Calyx Activity Hub — HubSpot Sales Analytics
 Complete UI Overhaul — Vibrant Neon Dark Theme
 """
@@ -960,12 +960,12 @@ SCORE_LEVELS = {
     "cold":  ("🧊 Cold", "cold"),
 }
 
-# ── NEW SAL (PIPELINE CREATION) TRACKING FUNCTIONS ──
-# Mission-style KPI tracking: New Investigators = New SALs
+# ── NEW PIPELINE CREATION TRACKING FUNCTIONS ──
+# Leading indicators for sales success: Pipeline creation metrics
 
 def _count_new_sals_by_period(new_pipeline_df, rep_name=None):
     """
-    Count new deals created by time periods - This is your 'New Investigators' KPI
+    Count new deals created by time periods - Leading indicator for pipeline health
     """
     if new_pipeline_df.empty or "create_date" not in new_pipeline_df.columns:
         return {"this_week": 0, "last_week": 0, "this_month": 0, "this_quarter": 0}
@@ -1030,8 +1030,8 @@ def _count_new_sals_by_period(new_pipeline_df, rep_name=None):
         "this_quarter": this_quarter_count
     }
 
-def _get_new_sal_trend(new_pipeline_df, days=30):
-    """Get daily new SAL creation trend"""
+def _get_new_pipeline_trend(new_pipeline_df, days=30):
+    """Get daily new pipeline creation trend"""
     if new_pipeline_df.empty or "create_date" not in new_pipeline_df.columns:
         return pd.DataFrame()
     
@@ -1045,7 +1045,7 @@ def _get_new_sal_trend(new_pipeline_df, days=30):
     # Count deals by date
     df["create_date_only"] = pd.to_datetime(df["create_date"]).dt.date
     daily_counts = df["create_date_only"].value_counts().reset_index()
-    daily_counts.columns = ["Date", "New SALs"]
+    daily_counts.columns = ["Date", "New Deals"]
     
     # Fill in missing dates with 0
     date_range = pd.date_range(
@@ -1056,32 +1056,32 @@ def _get_new_sal_trend(new_pipeline_df, days=30):
     
     full_range = pd.DataFrame({"Date": date_range.date})
     daily_counts = full_range.merge(daily_counts, on="Date", how="left").fillna(0)
-    daily_counts["New SALs"] = daily_counts["New SALs"].astype(int)
+    daily_counts["New Deals"] = daily_counts["New Deals"].astype(int)
     
     return daily_counts.sort_values("Date")
 
-def _calculate_mission_kpi_score(new_sals, contacts, meetings, tickets, role="acquisition"):
-    """Calculate KPI score like mission president metrics"""
+def _calculate_pipeline_kpi_score(new_deals, contacts, meetings, tickets, role="acquisition"):
+    """Calculate KPI score based on weekly activity targets"""
     
-    # Mission-style targets by role
+    # Weekly targets by role
     targets = {
-        "sdr": {"new_sals": 3, "contacts": 30, "meetings": 8, "tickets": 2},
-        "acquisition": {"new_sals": 2, "contacts": 25, "meetings": 6, "tickets": 3},
-        "am": {"new_sals": 1, "contacts": 20, "meetings": 5, "tickets": 4},
-        "ceo": {"new_sals": 1, "contacts": 15, "meetings": 3, "tickets": 2}
+        "sdr": {"new_deals": 3, "contacts": 30, "meetings": 8, "tickets": 2},
+        "acquisition": {"new_deals": 2, "contacts": 25, "meetings": 6, "tickets": 3},
+        "am": {"new_deals": 1, "contacts": 20, "meetings": 5, "tickets": 4},
+        "ceo": {"new_deals": 1, "contacts": 15, "meetings": 3, "tickets": 2}
     }
     
     target = targets.get(role, targets["acquisition"])
     
-    # Score each KPI (like mission metrics)  
-    sal_score = 30 if new_sals >= target["new_sals"] else 20 if new_sals >= max(1, target["new_sals"]//2) else 0
+    # Score each KPI based on target achievement
+    deal_score = 30 if new_deals >= target["new_deals"] else 20 if new_deals >= max(1, target["new_deals"]//2) else 0
     contact_score = 25 if contacts >= target["contacts"] else 15 if contacts >= int(target["contacts"]*0.8) else 5
     meeting_score = 25 if meetings >= target["meetings"] else 15 if meetings >= int(target["meetings"]*0.8) else 5
     ticket_score = 20 if tickets >= target["tickets"] else 10 if tickets >= max(1, target["tickets"]//2) else 0
     
-    total = sal_score + contact_score + meeting_score + ticket_score
+    total = deal_score + contact_score + meeting_score + ticket_score
     return {
-        "sal_score": sal_score,
+        "deal_score": deal_score,
         "contact_score": contact_score,
         "meeting_score": meeting_score,  
         "ticket_score": ticket_score,
@@ -1361,10 +1361,17 @@ if st.session_state.page == "command":
 
     section_divider()
 
-    # ── MISSION KPI SCORECARD ──
+    # ── NEW PIPELINE CREATION TRACKING ──
     if hasattr(data, 'new_pipeline') and not data.new_pipeline.empty:
-        section_header("🎖️", "Mission KPI Scorecard", C["score"])
-        st.markdown("**Leading indicators that predict sales success • Weekly targets like mission president metrics**")
+        section_header("📈", "New Pipeline Creation Tracking", C["score"])
+        st.markdown("**Leading indicators that predict sales success • Weekly targets for pipeline generation**")
+        
+        # DEBUG: Show new pipeline data info
+        st.write(f"DEBUG: New Pipeline data loaded: {len(data.new_pipeline)} rows")
+        if not data.new_pipeline.empty:
+            st.write("DEBUG: Columns:", list(data.new_pipeline.columns))
+            st.write("DEBUG: Sample data:")
+            st.dataframe(data.new_pipeline.head(3))
         
         # Build KPI scorecard
         kpi_data = []
@@ -1372,8 +1379,8 @@ if st.session_state.page == "command":
         for rep in selected_reps:
             role = REP_ROLES.get(rep, "acquisition")
             
-            # Get New SAL counts by period
-            sal_counts = _count_new_sals_by_period(data.new_pipeline, rep)
+            # Get New Pipeline creation counts by period  
+            pipeline_counts = _count_new_sals_by_period(data.new_pipeline, rep)
             
             # Get this week's activities (Monday to Sunday)
             week_start = date.today() - timedelta(days=date.today().weekday())
@@ -1406,24 +1413,24 @@ if st.session_state.page == "command":
                                  (pd.to_datetime(fk["created_date"]) <= week_end_ts)]) if not fk.empty else 0
             
             # Calculate KPI metrics
-            contacts = week_calls + week_emails  # Your "# of Contacts"
-            meetings = week_meetings  # Your "Lessons Taught"
-            tickets = week_tickets    # Your "Baptismal Invitations"
-            new_sals = sal_counts["this_week"]  # Your "New Investigators"
+            contacts = week_calls + week_emails  # Total outreach
+            meetings = week_meetings  # Meetings held 
+            tickets = week_tickets    # Proposals sent
+            new_deals = pipeline_counts["this_week"]  # New pipeline created
             
-            # Get mission-style KPI score
-            kpi_scores = _calculate_mission_kpi_score(new_sals, contacts, meetings, tickets, role)
+            # Get KPI score
+            kpi_scores = _calculate_pipeline_kpi_score(new_deals, contacts, meetings, tickets, role)
             
             kpi_data.append({
                 "Rep": rep,
                 "Role": role.upper(),
-                "New SALs": new_sals,
+                "New Deals": new_deals,
                 "Contacts": contacts,
                 "Meetings": meetings,
                 "Tickets": tickets,
                 "KPI Score": f"{kpi_scores['total']}/100",
-                "Last Week": sal_counts["last_week"],
-                "This Month": sal_counts["this_month"],
+                "Last Week": pipeline_counts["last_week"],
+                "This Month": pipeline_counts["this_month"],
                 "_score": kpi_scores['total'],
                 "_targets": kpi_scores['targets']
             })
