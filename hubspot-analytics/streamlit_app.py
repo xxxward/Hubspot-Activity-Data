@@ -1044,7 +1044,7 @@ def _get_new_pipeline_trend(new_pipeline_df, days=30):
     
     # Count deals by date
     df["created_date_only"] = pd.to_datetime(df["created_date"]).dt.date
-    daily_counts = df["create_date_only"].value_counts().reset_index()
+    daily_counts = df["created_date_only"].value_counts().reset_index()
     daily_counts.columns = ["Date", "New Deals"]
     
     # Fill in missing dates with 0
