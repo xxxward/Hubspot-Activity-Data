@@ -1459,7 +1459,7 @@ if st.session_state.page == "command":
             # New SAL Creation Trend
             section_header("📈", "New Pipeline Creation Trend", C["active"])
             
-            trend_data = _get_new_sal_trend(data.new_pipeline, days=30)
+            trend_data = _get_new_pipeline_trend(data.new_pipeline, days=30)
             if not trend_data.empty:
                 fig = px.line(
                     trend_data,
