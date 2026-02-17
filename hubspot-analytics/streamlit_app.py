@@ -1434,20 +1434,20 @@ if st.session_state.page == "command":
             
             # Add performance indicators
             kpi_df["Performance"] = kpi_df["_score"].apply(lambda x: 
-                "🔥 Crushing It" if x >= 85 else
+                "🔥 Excellent" if x >= 85 else
                 "✅ On Track" if x >= 70 else  
-                "⚡ Push Needed" if x >= 50 else
-                "🧊 Intervention"
+                "⚡ Needs Focus" if x >= 50 else
+                "📈 Development"
             )
             
             # Show the scorecard
-            display_cols = ["Rep", "Role", "New SALs", "Contacts", "Meetings", "Tickets", "KPI Score", "Performance"]
+            display_cols = ["Rep", "Role", "New Deals", "Contacts", "Meetings", "Tickets", "KPI Score", "Performance"]
             st.dataframe(
                 kpi_df[display_cols],
                 use_container_width=True,
                 hide_index=True,
                 column_config={
-                    "New SALs": st.column_config.NumberColumn("New SALs 🎯", help="New deals created this week"),
+                    "New Deals": st.column_config.NumberColumn("New Deals 🎯", help="New pipeline created this week"),
                     "Contacts": st.column_config.NumberColumn("Contacts 📞", help="Calls + Emails this week"),
                     "Meetings": st.column_config.NumberColumn("Meetings 📅", help="Meetings held this week"),
                     "Tickets": st.column_config.NumberColumn("Tickets 📋", help="Quotes/proposals sent this week")
