@@ -12,6 +12,7 @@ from src.sheets.sheets_client import read_all_tabs
 from src.parsing.normalize import (
     normalize_dataframe, build_uid_map_from_meetings,
     apply_owner_mapping, deduplicate_meetings, deduplicate_emails,
+    convert_calls_to_meetings_and_dedupe,
 )
 from src.parsing.filters import apply_deal_filters, apply_activity_filters
 from src.metrics.activity import count_activities, build_combined_activity_log
@@ -97,6 +98,14 @@ def load_all() -> AnalyticsData:
     logger.info("Deduplicating emails...")
     if not norm.get("emails", pd.DataFrame()).empty:
         norm["emails"] = deduplicate_emails(norm["emails"])
+
+    # 5c - Convert negotiation meeting calls to meetings and cross-deduplicate
+    logger.info("Converting negotiation meeting calls and cross-deduplicating...")
+    if not norm.get("calls", pd.DataFrame()).empty or not norm.get("meetings", pd.DataFrame()).empty:
+        norm["calls"], norm["meetings"] = convert_calls_to_meetings_and_dedupe(
+            norm.get("calls", pd.DataFrame()),
+            norm.get("meetings", pd.DataFrame())
+        )
 
     # 6 - Filter
     logger.info("Filtering...")
