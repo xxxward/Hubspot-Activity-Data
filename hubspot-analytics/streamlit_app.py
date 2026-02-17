@@ -890,6 +890,136 @@ SCORE_LEVELS = {
     "cold":  ("🧊 Cold", "cold"),
 }
 
+# ── NEW SAL (PIPELINE CREATION) TRACKING FUNCTIONS ──
+# Mission-style KPI tracking: New Investigators = New SALs
+
+def _count_new_sals_by_period(new_pipeline_df, rep_name=None):
+    """
+    Count new deals created by time periods - This is your 'New Investigators' KPI
+    """
+    if new_pipeline_df.empty or "create_date" not in new_pipeline_df.columns:
+        return {"this_week": 0, "last_week": 0, "this_month": 0, "this_quarter": 0}
+    
+    # Filter by rep if specified  
+    df = new_pipeline_df.copy()
+    if rep_name and "hubspot_owner_name" in df.columns:
+        df = df[df["hubspot_owner_name"] == rep_name]
+    elif rep_name and "deal_owner_email" in df.columns:
+        # Fallback to email matching if needed
+        rep_emails = {
+            "Owen Labombard": "olabombard@calyxcontainers.com",
+            "Brad Sherman": "bsherman@calyxcontainers.com", 
+            "Dave Borkowski": "dborkowski@calyxcontainers.com",
+            "Jake Lynch": "jlynch@calyxcontainers.com",
+            "Lance Mitton": "lmitton@calyxcontainers.com",
+            "Alex Gonzalez": "alex@calyxcontainers.com"
+        }
+        rep_email = rep_emails.get(rep_name)
+        if rep_email:
+            df = df[df["deal_owner_email"] == rep_email]
+    
+    if df.empty:
+        return {"this_week": 0, "last_week": 0, "this_month": 0, "this_quarter": 0}
+    
+    # Parse create dates
+    created_dates = pd.to_datetime(df["create_date"], errors="coerce")
+    df = df[created_dates.notna()]
+    created_dates = created_dates.dropna()
+    
+    if created_dates.empty:
+        return {"this_week": 0, "last_week": 0, "this_month": 0, "this_quarter": 0}
+    
+    today = date.today()
+    
+    # This week (Monday to Sunday)
+    days_since_monday = today.weekday()
+    this_week_start = today - timedelta(days=days_since_monday)
+    this_week_count = len(created_dates[created_dates.dt.date >= this_week_start])
+    
+    # Last week
+    last_week_start = this_week_start - timedelta(days=7)
+    last_week_end = this_week_start - timedelta(days=1)
+    last_week_count = len(created_dates[
+        (created_dates.dt.date >= last_week_start) & 
+        (created_dates.dt.date <= last_week_end)
+    ])
+    
+    # This month  
+    this_month_start = today.replace(day=1)
+    this_month_count = len(created_dates[created_dates.dt.date >= this_month_start])
+    
+    # This quarter
+    quarter_month = ((today.month - 1) // 3) * 3 + 1
+    this_quarter_start = today.replace(month=quarter_month, day=1)
+    this_quarter_count = len(created_dates[created_dates.dt.date >= this_quarter_start])
+    
+    return {
+        "this_week": this_week_count,
+        "last_week": last_week_count,
+        "this_month": this_month_count, 
+        "this_quarter": this_quarter_count
+    }
+
+def _get_new_sal_trend(new_pipeline_df, days=30):
+    """Get daily new SAL creation trend"""
+    if new_pipeline_df.empty or "create_date" not in new_pipeline_df.columns:
+        return pd.DataFrame()
+    
+    df = new_pipeline_df.copy()
+    created_dates = pd.to_datetime(df["create_date"], errors="coerce")
+    df = df[created_dates.notna()]
+    
+    if df.empty:
+        return pd.DataFrame()
+    
+    # Count deals by date
+    df["create_date_only"] = pd.to_datetime(df["create_date"]).dt.date
+    daily_counts = df["create_date_only"].value_counts().reset_index()
+    daily_counts.columns = ["Date", "New SALs"]
+    
+    # Fill in missing dates with 0
+    date_range = pd.date_range(
+        start=date.today() - timedelta(days=days),
+        end=date.today(), 
+        freq='D'
+    )
+    
+    full_range = pd.DataFrame({"Date": date_range.date})
+    daily_counts = full_range.merge(daily_counts, on="Date", how="left").fillna(0)
+    daily_counts["New SALs"] = daily_counts["New SALs"].astype(int)
+    
+    return daily_counts.sort_values("Date")
+
+def _calculate_mission_kpi_score(new_sals, contacts, meetings, tickets, role="acquisition"):
+    """Calculate KPI score like mission president metrics"""
+    
+    # Mission-style targets by role
+    targets = {
+        "sdr": {"new_sals": 3, "contacts": 30, "meetings": 8, "tickets": 2},
+        "acquisition": {"new_sals": 2, "contacts": 25, "meetings": 6, "tickets": 3},
+        "am": {"new_sals": 1, "contacts": 20, "meetings": 5, "tickets": 4},
+        "ceo": {"new_sals": 1, "contacts": 15, "meetings": 3, "tickets": 2}
+    }
+    
+    target = targets.get(role, targets["acquisition"])
+    
+    # Score each KPI (like mission metrics)  
+    sal_score = 30 if new_sals >= target["new_sals"] else 20 if new_sals >= max(1, target["new_sals"]//2) else 0
+    contact_score = 25 if contacts >= target["contacts"] else 15 if contacts >= int(target["contacts"]*0.8) else 5
+    meeting_score = 25 if meetings >= target["meetings"] else 15 if meetings >= int(target["meetings"]*0.8) else 5
+    ticket_score = 20 if tickets >= target["tickets"] else 10 if tickets >= max(1, target["tickets"]//2) else 0
+    
+    total = sal_score + contact_score + meeting_score + ticket_score
+    return {
+        "sal_score": sal_score,
+        "contact_score": contact_score,
+        "meeting_score": meeting_score,  
+        "ticket_score": ticket_score,
+        "total": total,
+        "max_possible": 100,
+        "targets": target
+    }
+
 # ── Deal-Linked Activity Tier Multipliers ──
 # Activities tied to a company with an active deal get 1.5x
 # Activities with a company but no active deal get 1.0x
@@ -1147,6 +1277,154 @@ if st.session_state.page == "command":
             empty_state("All quiet on the western front. 🤠")
 
     section_divider()
+
+    # ── MISSION KPI SCORECARD ──
+    if hasattr(data, 'new_pipeline') and not data.new_pipeline.empty:
+        section_header("🎖️", "Mission KPI Scorecard", C["score"])
+        st.markdown("**Leading indicators that predict sales success • Weekly targets like mission president metrics**")
+        
+        # Build KPI scorecard
+        kpi_data = []
+        
+        for rep in selected_reps:
+            role = REP_ROLES.get(rep, "acquisition")
+            
+            # Get New SAL counts by period
+            sal_counts = _count_new_sals_by_period(data.new_pipeline, rep)
+            
+            # Get this week's activities (Monday to Sunday)
+            week_start = date.today() - timedelta(days=date.today().weekday())
+            week_start_ts = pd.Timestamp(week_start)
+            week_end_ts = pd.Timestamp(date.today()) + pd.Timedelta(days=1)
+            
+            # Count weekly activities
+            week_calls = len(fc[(fc["hubspot_owner_name"] == rep) & 
+                               (pd.to_datetime(fc["activity_date"]) >= week_start_ts) &
+                               (pd.to_datetime(fc["activity_date"]) <= week_end_ts)]) if not fc.empty else 0
+            
+            week_emails = len(fe[(fe["hubspot_owner_name"] == rep) & 
+                                (pd.to_datetime(fe["activity_date"]) >= week_start_ts) &
+                                (pd.to_datetime(fe["activity_date"]) <= week_end_ts)]) if not fe.empty else 0
+            
+            week_meetings = len(fm[(fm["hubspot_owner_name"] == rep) & 
+                                  (pd.to_datetime(fm["meeting_start_time"]) >= week_start_ts) &
+                                  (pd.to_datetime(fm["meeting_start_time"]) <= week_end_ts)]) if not fm.empty else 0
+            
+            week_tickets = len(fk[(fk["hubspot_owner_name"] == rep) & 
+                                 (pd.to_datetime(fk["created_date"]) >= week_start_ts) &
+                                 (pd.to_datetime(fk["created_date"]) <= week_end_ts)]) if not fk.empty else 0
+            
+            # Calculate KPI metrics
+            contacts = week_calls + week_emails  # Your "# of Contacts"
+            meetings = week_meetings  # Your "Lessons Taught"
+            tickets = week_tickets    # Your "Baptismal Invitations"
+            new_sals = sal_counts["this_week"]  # Your "New Investigators"
+            
+            # Get mission-style KPI score
+            kpi_scores = _calculate_mission_kpi_score(new_sals, contacts, meetings, tickets, role)
+            
+            kpi_data.append({
+                "Rep": rep,
+                "Role": role.upper(),
+                "New SALs": new_sals,
+                "Contacts": contacts,
+                "Meetings": meetings,
+                "Tickets": tickets,
+                "KPI Score": f"{kpi_scores['total']}/100",
+                "Last Week": sal_counts["last_week"],
+                "This Month": sal_counts["this_month"],
+                "_score": kpi_scores['total'],
+                "_targets": kpi_scores['targets']
+            })
+        
+        if kpi_data:
+            kpi_df = pd.DataFrame(kpi_data)
+            kip_df = kpi_df.sort_values("_score", ascending=False)  # Fixed typo here
+            
+            # Add performance indicators
+            kip_df["Performance"] = kip_df["_score"].apply(lambda x: 
+                "🔥 Crushing It" if x >= 85 else
+                "✅ On Track" if x >= 70 else  
+                "⚡ Push Needed" if x >= 50 else
+                "🧊 Intervention"
+            )
+            
+            # Show the scorecard
+            display_cols = ["Rep", "Role", "New SALs", "Contacts", "Meetings", "Tickets", "KPI Score", "Performance"]
+            st.dataframe(
+                kip_df[display_cols],
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "New SALs": st.column_config.NumberColumn("New SALs 🎯", help="New deals created this week"),
+                    "Contacts": st.column_config.NumberColumn("Contacts 📞", help="Calls + Emails this week"),
+                    "Meetings": st.column_config.NumberColumn("Meetings 📅", help="Meetings held this week"),
+                    "Tickets": st.column_config.NumberColumn("Tickets 📋", help="Quotes/proposals sent this week")
+                }
+            )
+            
+            section_divider()
+            
+            # New SAL Creation Trend
+            section_header("📈", "New Pipeline Creation Trend", C["active"])
+            
+            trend_data = _get_new_sal_trend(data.new_pipeline, days=30)
+            if not trend_data.empty:
+                fig = px.line(
+                    trend_data,
+                    x="Date", 
+                    y="New SALs",
+                    title="Daily New SAL Creation (Last 30 Days)",
+                    markers=True
+                )
+                fig.update_traces(line_color=C["active"], marker_color=C["active"])
+                styled_fig(fig, 300)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Summary stats
+                total_month = trend_data["New SALs"].sum()
+                avg_daily = trend_data["New SALs"].mean()
+                st.markdown(f"**📊 30-Day Summary**: {total_month} total SALs created • {avg_daily:.1f} average per day")
+            else:
+                empty_state("No new pipeline data available")
+                
+            section_divider()
+            
+            # Time Period Leaderboards
+            section_header("🏆", "New SAL Creation Leaderboards", C["score"])
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.markdown("**📅 This Week**")
+                week_data = [(row["Rep"], row["New SALs"]) for _, row in kip_df.iterrows()]
+                week_data.sort(key=lambda x: x[1], reverse=True)
+                for i, (rep, count) in enumerate(week_data[:5]):
+                    medal = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else f"{i+1}."
+                    st.markdown(f"{medal} **{rep}**: {count} SALs")
+            
+            with col2:
+                st.markdown("**📆 This Month**")
+                month_data = [(row["Rep"], row["This Month"]) for _, row in kip_df.iterrows()]
+                month_data.sort(key=lambda x: x[1], reverse=True)
+                for i, (rep, count) in enumerate(month_data[:5]):
+                    medal = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else f"{i+1}."
+                    st.markdown(f"{medal} **{rep}**: {count} SALs")
+                    
+            with col3:
+                st.markdown("**📊 This Quarter**")
+                quarter_leaders = []
+                for rep in selected_reps:
+                    q_count = _count_new_sals_by_period(data.new_pipeline, rep)["this_quarter"]
+                    quarter_leaders.append((rep, q_count))
+                quarter_leaders.sort(key=lambda x: x[1], reverse=True)
+                for i, (rep, count) in enumerate(quarter_leaders[:5]):
+                    medal = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else f"{i+1}."
+                    st.markdown(f"{medal} **{rep}**: {count} SALs")
+                    
+        section_divider()
+    else:
+        st.info("💡 **Add 'New Pipeline' sheet** to track mission-style KPIs for deal creation")
 
     # ── Row 3: Activity Trend ──
     if quick == "Today":
