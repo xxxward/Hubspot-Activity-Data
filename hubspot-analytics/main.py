@@ -94,18 +94,23 @@ def load_all() -> AnalyticsData:
     if not norm.get("meetings", pd.DataFrame()).empty:
         norm["meetings"] = deduplicate_meetings(norm["meetings"])
 
-    # 5b - Deduplicate emails
-    logger.info("Deduplicating emails...")
-    if not norm.get("emails", pd.DataFrame()).empty:
-        norm["emails"] = deduplicate_emails(norm["emails"])
-
-    # 5c - Convert negotiation meeting calls to meetings and cross-deduplicate
+    # 5b - Convert negotiation meeting calls to meetings and cross-deduplicate
     logger.info("Converting negotiation meeting calls and cross-deduplicating...")
     if not norm.get("calls", pd.DataFrame()).empty or not norm.get("meetings", pd.DataFrame()).empty:
         norm["calls"], norm["meetings"] = convert_calls_to_meetings_and_dedupe(
             norm.get("calls", pd.DataFrame()),
             norm.get("meetings", pd.DataFrame())
         )
+        
+    # 5c - Deduplicate meetings AGAIN after call conversion
+    logger.info("Re-deduplicating meetings after call conversion...")
+    if not norm.get("meetings", pd.DataFrame()).empty:
+        norm["meetings"] = deduplicate_meetings(norm["meetings"])
+
+    # 5d - Deduplicate emails
+    logger.info("Deduplicating emails...")
+    if not norm.get("emails", pd.DataFrame()).empty:
+        norm["emails"] = deduplicate_emails(norm["emails"])
 
     # 6 - Filter
     logger.info("Filtering...")
