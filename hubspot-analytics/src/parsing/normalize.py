@@ -272,43 +272,70 @@ def _best_value(values: list[str]) -> str:
 def _merge_meeting_group(group_df: pd.DataFrame, name_col: str, outcome_col: str, company_col: str) -> dict:
     """
     Merge a group of duplicate meetings into a single representative record.
-    Takes the best/richest data from each meeting in the group.
+    Prioritizes the record with the most complete/rich data.
     """
     if group_df.empty:
         return {}
     
-    # Start with the first row as base
-    merged = group_df.iloc[0].to_dict()
+    # Score each record by how much data it has (prefer records with more fields filled)
+    def _score_record(row):
+        score = 0
+        # More points for having actual values vs null/empty
+        important_fields = [name_col, outcome_col, company_col, 'call_and_meeting_type', 'meeting_type', 'body_preview']
+        for field in important_fields:
+            if field in row.index:
+                val = str(row[field]).strip()
+                if val and val not in ['', 'nan', '<NA>', 'None']:
+                    score += 1
+        
+        # Extra points for having meeting outcome filled
+        if outcome_col in row.index and str(row[outcome_col]).strip() not in ['', 'nan', '<NA>', 'None']:
+            score += 2
+            
+        # Extra points for having call_and_meeting_type filled  
+        if 'call_and_meeting_type' in row.index and str(row['call_and_meeting_type']).strip() not in ['', 'nan', '<NA>', 'None']:
+            score += 2
+            
+        return score
     
-    # For key fields, take the best value across all duplicates
+    # Score all records and pick the one with highest score (most data)
+    group_df = group_df.copy()
+    group_df['_data_score'] = group_df.apply(_score_record, axis=1)
+    
+    # Sort by score (descending) and take the richest record as base
+    group_df = group_df.sort_values('_data_score', ascending=False)
+    best_record = group_df.iloc[0]
+    merged = best_record.to_dict()
+    
+    # For specific fields, still take the best value across all duplicates
     if name_col in group_df.columns:
         names = [_safe_str(val) for val in group_df[name_col]]
-        merged[name_col] = _best_value(names)
+        best_name = _best_value(names)
+        if best_name:  # Only override if we found a better name
+            merged[name_col] = best_name
     
     if company_col in group_df.columns:
         companies = [_safe_str(val) for val in group_df[company_col]]
-        merged[company_col] = _best_value(companies)
+        best_company = _best_value(companies)
+        if best_company:
+            merged[company_col] = best_company
     
-    # For outcome, take the one with highest priority
+    # For outcome, take the one with highest priority (but prefer the richest record's outcome if it's good)
     if outcome_col in group_df.columns:
-        outcomes = group_df[outcome_col].fillna("").astype(str)
-        best_outcome = ""
-        best_priority = -1
+        current_outcome = str(merged.get(outcome_col, "")).strip()
+        current_priority = OUTCOME_PRIORITY.get(current_outcome, 0)
         
-        for outcome in outcomes:
+        # Check if any other record has a better outcome
+        for _, row in group_df.iterrows():
+            outcome = str(row.get(outcome_col, "")).strip()
             priority = OUTCOME_PRIORITY.get(outcome, 0)
-            if priority > best_priority:
-                best_priority = priority
-                best_outcome = outcome
-        
-        merged[outcome_col] = best_outcome
+            if priority > current_priority:
+                merged[outcome_col] = outcome
+                current_priority = priority
     
-    # For other important fields, prefer non-empty values
-    important_fields = ['meeting_type', 'body_preview', 'associated_company_name']
-    for field in important_fields:
-        if field in group_df.columns:
-            values = [_safe_str(val) for val in group_df[field]]
-            merged[field] = _best_value(values)
+    # Remove the scoring column
+    if '_data_score' in merged:
+        del merged['_data_score']
     
     return merged
 
@@ -341,12 +368,19 @@ def deduplicate_meetings(df: pd.DataFrame) -> pd.DataFrame:
     pre_count = len(df)
     df = df.copy()
 
-    # Add normalized meeting names
+    # Add normalized meeting names and date (DATE only, not datetime)
     df["_norm_name"] = df[name_col].apply(_norm_meeting_name)
-    df["_date"] = pd.to_datetime(df[date_col], errors="coerce").dt.date
+    df["_date"] = pd.to_datetime(df[date_col], errors="coerce").dt.date  # DATE only, ignore time
     df["_rep"] = df.get(rep_col, "").fillna("").astype(str)
     df["_company"] = df.get(company_col, "").fillna("").astype(str)
     df["_outcome"] = df.get(outcome_col, "").fillna("").astype(str)
+
+    # DEBUG: Check for INSA meetings specifically
+    insa_meetings = df[df["_company"] == "INSA"]
+    if not insa_meetings.empty:
+        logger.info(f"DEBUG: Found {len(insa_meetings)} INSA meetings before dedup:")
+        for idx, row in insa_meetings.iterrows():
+            logger.info(f"  {idx}: {row['_norm_name'][:50]} | {row['_date']} | {row['_rep']} | {row['_company']}")
 
     # Group meetings for deduplication
     groups = []
@@ -363,6 +397,10 @@ def deduplicate_meetings(df: pd.DataFrame) -> pd.DataFrame:
         rep_val = row["_rep"]
         company_val = row["_company"]
 
+        # DEBUG: Log INSA meeting processing
+        if company_val == "INSA":
+            logger.info(f"DEBUG: Processing INSA meeting {idx}: '{norm_name}' on {date_val}")
+
         for idx2, row2 in df.iterrows():
             if idx2 in processed_indices or idx2 == idx:
                 continue
@@ -372,6 +410,8 @@ def deduplicate_meetings(df: pd.DataFrame) -> pd.DataFrame:
                 date_val == row2["_date"] and rep_val == row2["_rep"]):
                 candidates.append(idx2)
                 processed_indices.add(idx2)
+                if company_val == "INSA" or row2["_company"] == "INSA":
+                    logger.info(f"  DEBUG: Pattern 1 match - {idx2}")
 
             # Pattern 2: Both have blank names but same date/rep/company
             elif (not norm_name and not row2["_norm_name"] and
@@ -379,18 +419,25 @@ def deduplicate_meetings(df: pd.DataFrame) -> pd.DataFrame:
                   company_val and company_val == row2["_company"]):
                 candidates.append(idx2)
                 processed_indices.add(idx2)
+                if company_val == "INSA":
+                    logger.info(f"  DEBUG: Pattern 2 match - {idx2}")
                 
             # Pattern 3: One has name, other is blank, but same date/rep/company
-            # This catches cases like "[Gong] Meeting Name" + "<NA>" meeting on same day/rep/company
             elif ((norm_name and not row2["_norm_name"]) or (not norm_name and row2["_norm_name"])) and \
                  date_val == row2["_date"] and rep_val == row2["_rep"] and \
                  company_val and company_val == row2["_company"]:
                 candidates.append(idx2)
                 processed_indices.add(idx2)
+                if company_val == "INSA":
+                    logger.info(f"  DEBUG: Pattern 3 match - {idx2}: '{row2['_norm_name']}'")
 
         # Include the original row
         candidates.append(idx)
         processed_indices.add(idx)
+
+        # DEBUG: Log INSA candidates
+        if company_val == "INSA":
+            logger.info(f"  DEBUG: INSA meeting {idx} has {len(candidates)} candidates: {candidates}")
 
         # Merge the group
         group_rows = df.loc[candidates]
@@ -407,6 +454,14 @@ def deduplicate_meetings(df: pd.DataFrame) -> pd.DataFrame:
         canceled_removed = before_cancel_filter - len(result)
         if canceled_removed > 0:
             logger.info(f"Filtered out {canceled_removed} canceled meetings")
+
+    # DEBUG: Check INSA meetings after dedup
+    insa_after = result[result.get(company_col, "") == "INSA"]
+    if not insa_after.empty:
+        logger.info(f"DEBUG: Found {len(insa_after)} INSA meetings after dedup:")
+        for idx, row in insa_after.iterrows():
+            meeting_name = row.get(name_col, "")
+            logger.info(f"  {meeting_name[:50]} | {row.get(company_col, '')}")
 
     # Clean up temp columns
     result = result.drop(columns=[c for c in result.columns if c.startswith("_")], errors="ignore")
@@ -630,7 +685,7 @@ def deduplicate_emails(df: pd.DataFrame) -> pd.DataFrame:
 
 def convert_calls_to_meetings_and_dedupe(calls_df: pd.DataFrame, meetings_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    1. Convert calls with call_and_meeting_type = "negotiation meeting" to meetings
+    1. Convert calls with call_and_meeting_type filled out to meetings
     2. Cross-deduplicate calls and meetings to eliminate duplicates
     3. Return cleaned (calls_df, meetings_df)
     """
@@ -640,25 +695,33 @@ def convert_calls_to_meetings_and_dedupe(calls_df: pd.DataFrame, meetings_df: pd
     calls_df = calls_df.copy() if not calls_df.empty else pd.DataFrame()
     meetings_df = meetings_df.copy() if not meetings_df.empty else pd.DataFrame()
     
-    # Step 1: Convert "negotiation meeting" calls to meetings
-    negotiation_calls = pd.DataFrame()
+    # Step 1: Convert calls with call_and_meeting_type filled to meetings
+    meeting_type_calls = pd.DataFrame()
     if not calls_df.empty and "call_and_meeting_type" in calls_df.columns:
-        negotiation_mask = calls_df["call_and_meeting_type"].str.lower().str.contains(
-            "negotiation meeting", na=False
+        # Look for ANY filled call_and_meeting_type (not just "negotiation meeting")
+        meeting_type_mask = (
+            calls_df["call_and_meeting_type"].notna() & 
+            (calls_df["call_and_meeting_type"].astype(str).str.strip() != "") &
+            (~calls_df["call_and_meeting_type"].astype(str).str.strip().isin(['nan', 'None', '<NA>']))
         )
-        negotiation_calls = calls_df[negotiation_mask].copy()
-        calls_df = calls_df[~negotiation_mask].copy()  # Remove from calls
         
-        if not negotiation_calls.empty:
+        meeting_type_calls = calls_df[meeting_type_mask].copy()
+        calls_df = calls_df[~meeting_type_mask].copy()  # Remove from calls
+        
+        if not meeting_type_calls.empty:
+            logger.info(f"DEBUG: Found {len(meeting_type_calls)} calls with call_and_meeting_type filled:")
+            for _, row in meeting_type_calls.iterrows():
+                logger.info(f"  {row.get('call_title', 'No title')} - Type: {row['call_and_meeting_type']}")
+            
             # Convert call fields to meeting fields
-            negotiation_calls["meeting_name"] = negotiation_calls.get("call_title", "Negotiation Meeting")
-            negotiation_calls["meeting_start_time"] = negotiation_calls["activity_date"]
-            negotiation_calls["meeting_outcome"] = "Completed"  # Assume completed since it was a logged call
-            negotiation_calls["meeting_type"] = "Negotiation Meeting"
+            meeting_type_calls["meeting_name"] = meeting_type_calls.get("call_title", "Meeting from Call")
+            meeting_type_calls["meeting_start_time"] = meeting_type_calls["activity_date"]
+            meeting_type_calls["meeting_outcome"] = "Completed"  # Assume completed since it was a logged call
+            meeting_type_calls["meeting_type"] = meeting_type_calls["call_and_meeting_type"]
             
             # Add to meetings
-            meetings_df = pd.concat([meetings_df, negotiation_calls], ignore_index=True)
-            logger.info(f"Converted {len(negotiation_calls)} negotiation meeting calls to meetings")
+            meetings_df = pd.concat([meetings_df, meeting_type_calls], ignore_index=True)
+            logger.info(f"Converted {len(meeting_type_calls)} calls with meeting types to meetings")
     
     # Step 2: Cross-deduplicate calls and meetings
     # Remove calls that match meetings by date/time + rep + company
@@ -673,7 +736,7 @@ def convert_calls_to_meetings_and_dedupe(calls_df: pd.DataFrame, meetings_df: pd
             if pd.isna(call_date):
                 continue
                 
-            # Look for matching meetings within 30 minutes
+            # Look for matching meetings within 2 hours (more lenient)
             for _, meeting_row in meetings_df.iterrows():
                 meeting_date = pd.to_datetime(meeting_row.get("meeting_start_time"), errors="coerce")
                 meeting_rep = str(meeting_row.get("hubspot_owner_name", ""))
@@ -682,11 +745,12 @@ def convert_calls_to_meetings_and_dedupe(calls_df: pd.DataFrame, meetings_df: pd
                 if pd.isna(meeting_date):
                     continue
                 
-                # Match if same rep, company, and within 30 minutes
+                # Match if same rep, company, and within 2 hours
                 if (call_rep == meeting_rep and 
                     call_company == meeting_company and
-                    abs((call_date - meeting_date).total_seconds()) <= 1800):  # 30 minutes
+                    abs((call_date - meeting_date).total_seconds()) <= 7200):  # 2 hours = 7200 seconds
                     calls_to_remove.append(call_idx)
+                    logger.info(f"DEBUG: Removing call that duplicates meeting - {call_company} on {call_date.date()}")
                     break
         
         if calls_to_remove:
