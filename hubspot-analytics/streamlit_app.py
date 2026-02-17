@@ -568,6 +568,9 @@ st.markdown('<div class="filter-spacer"></div>', unsafe_allow_html=True)
 with st.expander("🔎 Filters", expanded=False):
     # Quick-select chips
     # ── PERSISTENT FILTER INITIALIZATION ──
+    # Define today first before using in session state
+    today = datetime.now(LOCAL_TZ).date()
+    
     # Initialize persistent filters in session state if they don't exist
     if "persistent_reps" not in st.session_state:
         st.session_state.persistent_reps = REPS_IN_SCOPE
@@ -605,7 +608,6 @@ with st.expander("🔎 Filters", expanded=False):
             st.session_state.persistent_custom_date = (_default_start, today)
             st.rerun()
     
-    today = datetime.now(LOCAL_TZ).date()
     if quick == "Today":
         start_date, end_date = today, today
     elif quick == "7d":
