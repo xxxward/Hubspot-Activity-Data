@@ -1,4 +1,4 @@
-v"""
+"""
 Calyx Activity Hub — HubSpot Sales Analytics
 Complete UI Overhaul — Vibrant Neon Dark Theme
 """
