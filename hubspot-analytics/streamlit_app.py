@@ -963,7 +963,7 @@ SCORE_LEVELS = {
 # ── NEW PIPELINE CREATION TRACKING FUNCTIONS ──
 # Leading indicators for sales success: Pipeline creation metrics
 
-def _count_new_sals_by_period(new_pipeline_df, rep_name=None):
+def _count_new_deals_by_period(new_pipeline_df, rep_name=None):
     """
     Count new deals created by time periods - Leading indicator for pipeline health
     """
@@ -1400,7 +1400,7 @@ if st.session_state.page == "command":
             role = REP_ROLES.get(rep, "acquisition")
             
             # Get New Pipeline creation counts by period  
-            pipeline_counts = _count_new_sals_by_period(data.new_pipeline, rep)
+            pipeline_counts = _count_new_deals_by_period(data.new_pipeline, rep)
             
             # Get this week's activities (Monday to Sunday)
             week_start = date.today() - timedelta(days=date.today().weekday())
@@ -1509,7 +1509,7 @@ if st.session_state.page == "command":
             section_divider()
             
             # Time Period Leaderboards
-            section_header("🏆", "New SAL Creation Leaderboards", C["score"])
+            section_header("🏆", "New Deal Creation Leaderboards", C["score"])
             
             col1, col2, col3 = st.columns(3)
             
@@ -1519,7 +1519,7 @@ if st.session_state.page == "command":
                 week_data.sort(key=lambda x: x[1], reverse=True)
                 for i, (rep, count) in enumerate(week_data[:5]):
                     medal = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else f"{i+1}."
-                    st.markdown(f"{medal} **{rep}**: {count} SALs")
+                    st.markdown(f"{medal} **{rep}**: {count} deals")
             
             with col2:
                 st.markdown("**📆 This Month**")
@@ -1527,18 +1527,18 @@ if st.session_state.page == "command":
                 month_data.sort(key=lambda x: x[1], reverse=True)
                 for i, (rep, count) in enumerate(month_data[:5]):
                     medal = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else f"{i+1}."
-                    st.markdown(f"{medal} **{rep}**: {count} SALs")
+                    st.markdown(f"{medal} **{rep}**: {count} deals")
                     
             with col3:
                 st.markdown("**📊 This Quarter**")
                 quarter_leaders = []
                 for rep in selected_reps:
-                    q_count = _count_new_sals_by_period(data.new_pipeline, rep)["this_quarter"]
+                    q_count = _count_new_deals_by_period(data.new_pipeline, rep)["this_quarter"]
                     quarter_leaders.append((rep, q_count))
                 quarter_leaders.sort(key=lambda x: x[1], reverse=True)
                 for i, (rep, count) in enumerate(quarter_leaders[:5]):
                     medal = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else f"{i+1}."
-                    st.markdown(f"{medal} **{rep}**: {count} SALs")
+                    st.markdown(f"{medal} **{rep}**: {count} deals")
                     
         section_divider()
     else:
