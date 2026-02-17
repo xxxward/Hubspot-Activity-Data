@@ -272,7 +272,7 @@ def _best_value(values: list[str]) -> str:
 def _merge_meeting_group(group_df: pd.DataFrame, name_col: str, outcome_col: str, company_col: str) -> dict:
     """
     Merge a group of duplicate meetings into a single representative record.
-    Prioritizes the record with the most complete/rich data.
+    Prioritizes the record with the most complete/rich data, especially Gong records.
     """
     if group_df.empty:
         return {}
@@ -280,21 +280,37 @@ def _merge_meeting_group(group_df: pd.DataFrame, name_col: str, outcome_col: str
     # Score each record by how much data it has (prefer records with more fields filled)
     def _score_record(row):
         score = 0
+        
+        # HEAVILY prioritize Gong records - they have the most reliable data
+        meeting_name = str(row.get(name_col, "")).strip()
+        if meeting_name.startswith("[Gong]"):
+            score += 10  # Big bonus for Gong records
+            
+        # Penalize records with no outcome
+        outcome = str(row.get(outcome_col, "")).strip()
+        if outcome and outcome not in ['', 'nan', '<NA>', 'None']:
+            if outcome in ['Completed', 'Scheduled', 'No Show', 'Rescheduled']:
+                score += 5  # Good outcomes get big bonus
+            # Don't penalize canceled here - they should be filtered out already
+        else:
+            score -= 3  # Penalize missing outcome
+        
         # More points for having actual values vs null/empty
-        important_fields = [name_col, outcome_col, company_col, 'call_and_meeting_type', 'meeting_type', 'body_preview']
+        important_fields = [name_col, company_col, 'call_and_meeting_type', 'meeting_type', 'body_preview']
         for field in important_fields:
             if field in row.index:
                 val = str(row[field]).strip()
                 if val and val not in ['', 'nan', '<NA>', 'None']:
                     score += 1
-        
-        # Extra points for having meeting outcome filled
-        if outcome_col in row.index and str(row[outcome_col]).strip() not in ['', 'nan', '<NA>', 'None']:
-            score += 2
             
         # Extra points for having call_and_meeting_type filled  
         if 'call_and_meeting_type' in row.index and str(row['call_and_meeting_type']).strip() not in ['', 'nan', '<NA>', 'None']:
             score += 2
+            
+        # Penalize "Meeting sync" sources (they're usually less complete)
+        source = str(row.get('meeting_source', "")).strip()
+        if 'sync' in source.lower():
+            score -= 2
             
         return score
     
@@ -310,9 +326,14 @@ def _merge_meeting_group(group_df: pd.DataFrame, name_col: str, outcome_col: str
     # For specific fields, still take the best value across all duplicates
     if name_col in group_df.columns:
         names = [_safe_str(val) for val in group_df[name_col]]
-        best_name = _best_value(names)
-        if best_name:  # Only override if we found a better name
-            merged[name_col] = best_name
+        # Prefer Gong names over sync names
+        gong_names = [name for name in names if name.startswith("[Gong]")]
+        if gong_names:
+            merged[name_col] = _best_value(gong_names)
+        else:
+            best_name = _best_value(names)
+            if best_name:
+                merged[name_col] = best_name
     
     if company_col in group_df.columns:
         companies = [_safe_str(val) for val in group_df[company_col]]
@@ -320,18 +341,24 @@ def _merge_meeting_group(group_df: pd.DataFrame, name_col: str, outcome_col: str
         if best_company:
             merged[company_col] = best_company
     
-    # For outcome, take the one with highest priority (but prefer the richest record's outcome if it's good)
+    # For outcome, strongly prefer valid outcomes over empty ones
     if outcome_col in group_df.columns:
-        current_outcome = str(merged.get(outcome_col, "")).strip()
-        current_priority = OUTCOME_PRIORITY.get(current_outcome, 0)
+        outcomes = group_df[outcome_col].fillna("").astype(str)
+        best_outcome = ""
+        best_priority = -1
         
-        # Check if any other record has a better outcome
-        for _, row in group_df.iterrows():
-            outcome = str(row.get(outcome_col, "")).strip()
+        for outcome in outcomes:
+            # Skip canceled outcomes - they should be filtered out already
+            if outcome == "Canceled":
+                continue
+                
             priority = OUTCOME_PRIORITY.get(outcome, 0)
-            if priority > current_priority:
-                merged[outcome_col] = outcome
-                current_priority = priority
+            if outcome and outcome not in ['', 'nan', '<NA>', 'None'] and priority > best_priority:
+                best_priority = priority
+                best_outcome = outcome
+        
+        if best_outcome:
+            merged[outcome_col] = best_outcome
     
     # Remove the scoring column
     if '_data_score' in merged:
