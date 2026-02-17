@@ -1090,6 +1090,19 @@ def _calculate_mission_kpi_score(new_sals, contacts, meetings, tickets, role="ac
         "targets": target
     }
 
+def _count_completed_meetings(meetings_df):
+    """Count only meetings that actually happened (completed meetings)"""
+    if meetings_df.empty:
+        return 0
+    if "_counts_as_meeting" in meetings_df.columns:
+        return len(meetings_df[meetings_df["_counts_as_meeting"] == True])
+    else:
+        # Fallback - count meetings with "Completed" outcome  
+        if "meeting_outcome" in meetings_df.columns:
+            return len(meetings_df[meetings_df["meeting_outcome"] == "Completed"])
+        else:
+            return len(meetings_df)  # If no outcome info, count all
+
 # ── Deal-Linked Activity Tier Multipliers ──
 # Activities tied to a company with an active deal get 1.5x
 # Activities with a company but no active deal get 1.0x
@@ -1367,7 +1380,7 @@ if st.session_state.page == "command":
             week_start_ts = pd.Timestamp(week_start)
             week_end_ts = pd.Timestamp(date.today()) + pd.Timedelta(days=1)
             
-            # Count weekly activities
+            # Count weekly activities (only completed meetings count)
             week_calls = len(fc[(fc["hubspot_owner_name"] == rep) & 
                                (pd.to_datetime(fc["activity_date"]) >= week_start_ts) &
                                (pd.to_datetime(fc["activity_date"]) <= week_end_ts)]) if not fc.empty else 0
@@ -1376,9 +1389,17 @@ if st.session_state.page == "command":
                                 (pd.to_datetime(fe["activity_date"]) >= week_start_ts) &
                                 (pd.to_datetime(fe["activity_date"]) <= week_end_ts)]) if not fe.empty else 0
             
-            week_meetings = len(fm[(fm["hubspot_owner_name"] == rep) & 
-                                  (pd.to_datetime(fm["meeting_start_time"]) >= week_start_ts) &
-                                  (pd.to_datetime(fm["meeting_start_time"]) <= week_end_ts)]) if not fm.empty else 0
+            # ONLY count meetings that are marked as completed (actually happened)
+            if not fm.empty and "_counts_as_meeting" in fm.columns:
+                week_meetings = len(fm[(fm["hubspot_owner_name"] == rep) & 
+                                      (pd.to_datetime(fm["meeting_start_time"]) >= week_start_ts) &
+                                      (pd.to_datetime(fm["meeting_start_time"]) <= week_end_ts) &
+                                      (fm["_counts_as_meeting"] == True)])  # Only completed meetings
+            else:
+                # Fallback if no _counts_as_meeting column
+                week_meetings = len(fm[(fm["hubspot_owner_name"] == rep) & 
+                                      (pd.to_datetime(fm["meeting_start_time"]) >= week_start_ts) &
+                                      (pd.to_datetime(fm["meeting_start_time"]) <= week_end_ts)]) if not fm.empty else 0
             
             week_tickets = len(fk[(fk["hubspot_owner_name"] == rep) & 
                                  (pd.to_datetime(fk["created_date"]) >= week_start_ts) &
