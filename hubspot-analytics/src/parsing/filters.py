@@ -87,4 +87,27 @@ def apply_deal_filters(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def apply_activity_filters(df: pd.DataFrame) -> pd.DataFrame:
-    return filter_by_rep(df)
+    """Apply rep filter, but include internal meetings about clients"""
+    if df.empty:
+        return df
+        
+    # First apply standard rep filter
+    rep_filtered = filter_by_rep(df)
+    
+    # For meetings, also include "internal" meetings that have a company_name
+    # (these are internal meetings ABOUT a client, which are valuable)
+    if "meeting_name" in df.columns and "company_name" in df.columns:
+        internal_meetings = df[
+            (df["meeting_name"].str.contains("internal", case=False, na=False) |
+             df["meeting_name"].str.contains("team", case=False, na=False) |
+             df["meeting_name"].str.contains("strategy", case=False, na=False)) &
+            (df["company_name"].notna() & (df["company_name"] != ""))  # Must have a company
+        ]
+        
+        if not internal_meetings.empty:
+            # Combine rep meetings with internal meetings about clients
+            combined = pd.concat([rep_filtered, internal_meetings]).drop_duplicates()
+            logger.info(f"Added {len(internal_meetings)} internal meetings about clients")
+            return combined
+    
+    return rep_filtered
