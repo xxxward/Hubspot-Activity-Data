@@ -207,6 +207,28 @@ def apply_owner_mapping(df: pd.DataFrame, uid_map: dict[str, str], tab_type: str
         last = df.get("last_name", pd.Series("", index=df.index)).fillna("").astype(str).str.strip()
         df["hubspot_owner_name"] = (first + " " + last).str.strip()
 
+    elif tab_type == "new_pipeline":
+        # New Pipeline has First name/Last name columns for deal owner
+        first_col = "first_name" if "first_name" in df.columns else None
+        last_col = "last_name" if "last_name" in df.columns else None
+        
+        if first_col and last_col:
+            first = df[first_col].fillna("").astype(str).str.strip()
+            last = df[last_col].fillna("").astype(str).str.strip()
+            df["hubspot_owner_name"] = (first + " " + last).str.strip()
+        elif "deal_owner_email" in df.columns:
+            # Fallback to mapping by email if needed
+            rep_emails = {
+                "olabombard@calyxcontainers.com": "Owen Labombard",
+                "bsherman@calyxcontainers.com": "Brad Sherman", 
+                "dborkowski@calyxcontainers.com": "Dave Borkowski",
+                "jlynch@calyxcontainers.com": "Jake Lynch",
+                "lmitton@calyxcontainers.com": "Lance Mitton",
+                "alex@calyxcontainers.com": "Alex Gonzalez"
+            }
+            df["hubspot_owner_name"] = df["deal_owner_email"].map(rep_emails).fillna("")
+        logger.info("New Pipeline owner mapping: %d rows after processing.", len(df))
+
     # deals: hubspot_owner_name already set from Opp Owner alias
     return df
 
