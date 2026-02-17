@@ -235,9 +235,16 @@ def apply_owner_mapping(df: pd.DataFrame, uid_map: dict[str, str], tab_type: str
 
 # -- Meeting Deduplication ------------------------------------------------
 
+# Meeting outcomes that COUNT as actual meetings (exclude canceled)
+VALID_MEETING_OUTCOMES = {
+    "Completed", "No Show", "Rescheduled", "Scheduled"
+    # Note: "Canceled" is excluded - these don't count as meetings
+}
+
 OUTCOME_PRIORITY = {
-    "Completed": 5, "No Show": 4, "Canceled": 3,
-    "Rescheduled": 2, "Scheduled": 1, "": 0
+    "Completed": 5, "No Show": 4, "Rescheduled": 2, "Scheduled": 1, 
+    "Canceled": 0,  # Canceled gets lowest priority and filtered out
+    "": 0
 }
 
 
@@ -266,8 +273,10 @@ def deduplicate_meetings(df: pd.DataFrame) -> pd.DataFrame:
     """
     Deduplicate meetings using the three-pattern algorithm:
     1. [Gong] prefix duplicates
-    2. Google Meet: prefix duplicates
+    2. Google Meet: prefix duplicates  
     3. Blank-name CRM entries matching by date+rep+company
+    4. Filter out canceled meetings (they don't count)
+    5. Include internal meetings about clients
 
     Groups are merged keeping the richest data.
     """
@@ -280,6 +289,79 @@ def deduplicate_meetings(df: pd.DataFrame) -> pd.DataFrame:
     rep_col = "hubspot_owner_name"
     company_col = "company_name"
     outcome_col = "meeting_outcome"
+
+    if not name_col:
+        logger.warning("No meeting_name column found for deduplication.")
+        return df
+
+    pre_count = len(df)
+    df = df.copy()
+
+    # Add normalized meeting names
+    df["_norm_name"] = df[name_col].apply(_norm_meeting_name)
+    df["_date"] = pd.to_datetime(df[date_col], errors="coerce").dt.date
+    df["_rep"] = df.get(rep_col, "").fillna("").astype(str)
+    df["_company"] = df.get(company_col, "").fillna("").astype(str)
+    df["_outcome"] = df.get(outcome_col, "").fillna("").astype(str)
+
+    # Group meetings for deduplication
+    groups = []
+    processed_indices = set()
+
+    for idx, row in df.iterrows():
+        if idx in processed_indices:
+            continue
+
+        # Find all potential duplicates for this meeting
+        candidates = []
+        norm_name = row["_norm_name"]
+        date_val = row["_date"]
+        rep_val = row["_rep"]
+        company_val = row["_company"]
+
+        for idx2, row2 in df.iterrows():
+            if idx2 in processed_indices or idx2 == idx:
+                continue
+
+            # Pattern 1: Same normalized name, date, rep (regardless of company)
+            if (norm_name and norm_name == row2["_norm_name"] and 
+                date_val == row2["_date"] and rep_val == row2["_rep"]):
+                candidates.append(idx2)
+                processed_indices.add(idx2)
+
+            # Pattern 2: Both have blank names but same date/rep/company
+            elif (not norm_name and not row2["_norm_name"] and
+                  date_val == row2["_date"] and rep_val == row2["_rep"] and
+                  company_val and company_val == row2["_company"]):
+                candidates.append(idx2)
+                processed_indices.add(idx2)
+
+        # Include the original row
+        candidates.append(idx)
+        processed_indices.add(idx)
+
+        # Merge the group
+        group_rows = df.loc[candidates]
+        merged = _merge_meeting_group(group_rows, name_col, outcome_col, company_col)
+        groups.append(merged)
+
+    # Reconstruct DataFrame
+    result = pd.DataFrame(groups)
+
+    # FILTER OUT CANCELED MEETINGS - they don't count as meetings
+    if outcome_col in result.columns:
+        before_cancel_filter = len(result)
+        result = result[result[outcome_col] != "Canceled"].copy()
+        canceled_removed = before_cancel_filter - len(result)
+        if canceled_removed > 0:
+            logger.info(f"Filtered out {canceled_removed} canceled meetings")
+
+    # Clean up temp columns
+    result = result.drop(columns=[c for c in result.columns if c.startswith("_")], errors="ignore")
+
+    logger.info("Meeting dedup: %d -> %d rows (removed %d duplicates).", 
+                pre_count, len(result), pre_count - len(result))
+    return result
 
     if name_col is None or date_col not in df.columns:
         logger.warning("Cannot deduplicate meetings — missing columns.")
@@ -492,6 +574,74 @@ def deduplicate_emails(df: pd.DataFrame) -> pd.DataFrame:
     logger.info("Email dedup: %d -> %d after Gong dedup -> %d after thread collapse (removed %d total).",
                 pre, after_gong, len(result), pre - len(result))
     return result
+
+
+def convert_calls_to_meetings_and_dedupe(calls_df: pd.DataFrame, meetings_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    1. Convert calls with call_and_meeting_type = "negotiation meeting" to meetings
+    2. Cross-deduplicate calls and meetings to eliminate duplicates
+    3. Return cleaned (calls_df, meetings_df)
+    """
+    if calls_df.empty and meetings_df.empty:
+        return calls_df, meetings_df
+    
+    calls_df = calls_df.copy() if not calls_df.empty else pd.DataFrame()
+    meetings_df = meetings_df.copy() if not meetings_df.empty else pd.DataFrame()
+    
+    # Step 1: Convert "negotiation meeting" calls to meetings
+    negotiation_calls = pd.DataFrame()
+    if not calls_df.empty and "call_and_meeting_type" in calls_df.columns:
+        negotiation_mask = calls_df["call_and_meeting_type"].str.lower().str.contains(
+            "negotiation meeting", na=False
+        )
+        negotiation_calls = calls_df[negotiation_mask].copy()
+        calls_df = calls_df[~negotiation_mask].copy()  # Remove from calls
+        
+        if not negotiation_calls.empty:
+            # Convert call fields to meeting fields
+            negotiation_calls["meeting_name"] = negotiation_calls.get("call_title", "Negotiation Meeting")
+            negotiation_calls["meeting_start_time"] = negotiation_calls["activity_date"]
+            negotiation_calls["meeting_outcome"] = "Completed"  # Assume completed since it was a logged call
+            negotiation_calls["meeting_type"] = "Negotiation Meeting"
+            
+            # Add to meetings
+            meetings_df = pd.concat([meetings_df, negotiation_calls], ignore_index=True)
+            logger.info(f"Converted {len(negotiation_calls)} negotiation meeting calls to meetings")
+    
+    # Step 2: Cross-deduplicate calls and meetings
+    # Remove calls that match meetings by date/time + rep + company
+    if not calls_df.empty and not meetings_df.empty:
+        calls_to_remove = []
+        
+        for call_idx, call_row in calls_df.iterrows():
+            call_date = pd.to_datetime(call_row.get("activity_date"), errors="coerce")
+            call_rep = str(call_row.get("hubspot_owner_name", ""))
+            call_company = str(call_row.get("company_name", ""))
+            
+            if pd.isna(call_date):
+                continue
+                
+            # Look for matching meetings within 30 minutes
+            for _, meeting_row in meetings_df.iterrows():
+                meeting_date = pd.to_datetime(meeting_row.get("meeting_start_time"), errors="coerce")
+                meeting_rep = str(meeting_row.get("hubspot_owner_name", ""))
+                meeting_company = str(meeting_row.get("company_name", ""))
+                
+                if pd.isna(meeting_date):
+                    continue
+                
+                # Match if same rep, company, and within 30 minutes
+                if (call_rep == meeting_rep and 
+                    call_company == meeting_company and
+                    abs((call_date - meeting_date).total_seconds()) <= 1800):  # 30 minutes
+                    calls_to_remove.append(call_idx)
+                    break
+        
+        if calls_to_remove:
+            calls_df = calls_df.drop(calls_to_remove)
+            logger.info(f"Removed {len(calls_to_remove)} calls that duplicate meetings")
+    
+    return calls_df, meetings_df
 
 
 # -- Column dedup & normalization pipeline --------------------------------
