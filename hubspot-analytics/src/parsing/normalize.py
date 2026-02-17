@@ -379,6 +379,14 @@ def deduplicate_meetings(df: pd.DataFrame) -> pd.DataFrame:
                   company_val and company_val == row2["_company"]):
                 candidates.append(idx2)
                 processed_indices.add(idx2)
+                
+            # Pattern 3: One has name, other is blank, but same date/rep/company
+            # This catches cases like "[Gong] Meeting Name" + "<NA>" meeting on same day/rep/company
+            elif ((norm_name and not row2["_norm_name"]) or (not norm_name and row2["_norm_name"])) and \
+                 date_val == row2["_date"] and rep_val == row2["_rep"] and \
+                 company_val and company_val == row2["_company"]:
+                candidates.append(idx2)
+                processed_indices.add(idx2)
 
         # Include the original row
         candidates.append(idx)
