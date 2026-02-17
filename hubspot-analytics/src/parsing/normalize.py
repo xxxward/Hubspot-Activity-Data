@@ -235,10 +235,10 @@ def apply_owner_mapping(df: pd.DataFrame, uid_map: dict[str, str], tab_type: str
 
 # -- Meeting Deduplication ------------------------------------------------
 
-# Meeting outcomes that COUNT as actual meetings (exclude canceled)
+# Meeting outcomes that COUNT as actual meetings that HAPPENED (only completed count)
 VALID_MEETING_OUTCOMES = {
-    "Completed", "No Show", "Rescheduled", "Scheduled"
-    # Note: "Canceled" is excluded - these don't count as meetings
+    "Completed"  # Only completed meetings count as meetings that actually happened
+    # Note: "Scheduled" = future meeting, "No Show" = didn't happen, "Canceled" = didn't happen
 }
 
 OUTCOME_PRIORITY = {
@@ -278,6 +278,7 @@ def _merge_meeting_group(group_df: pd.DataFrame, name_col: str, outcome_col: str
     """
     Merge a group of duplicate meetings into a single representative record.
     Prioritizes the record with the most complete/rich data, especially Gong records.
+    Then pulls the BEST data from ALL records in the group.
     """
     if group_df.empty:
         return {}
@@ -328,42 +329,65 @@ def _merge_meeting_group(group_df: pd.DataFrame, name_col: str, outcome_col: str
     best_record = group_df.iloc[0]
     merged = best_record.to_dict()
     
-    # For specific fields, still take the best value across all duplicates
+    # NOW MERGE THE BEST DATA FROM ALL RECORDS
+    # For each field, take the best non-empty value across ALL duplicates
+    
+    # Meeting name - prefer Gong names, then longest names
     if name_col in group_df.columns:
-        names = [_safe_str(val) for val in group_df[name_col]]
-        # Prefer Gong names over sync names
+        names = [_safe_str(val) for val in group_df[name_col] if _safe_str(val)]
         gong_names = [name for name in names if name.startswith("[Gong]")]
         if gong_names:
-            merged[name_col] = _best_value(gong_names)
-        else:
-            best_name = _best_value(names)
-            if best_name:
-                merged[name_col] = best_name
+            merged[name_col] = max(gong_names, key=len)  # Longest Gong name
+        elif names:
+            merged[name_col] = max(names, key=len)  # Longest name overall
     
+    # Company name - take the longest/most complete
     if company_col in group_df.columns:
-        companies = [_safe_str(val) for val in group_df[company_col]]
-        best_company = _best_value(companies)
-        if best_company:
-            merged[company_col] = best_company
+        companies = [_safe_str(val) for val in group_df[company_col] if _safe_str(val)]
+        if companies:
+            merged[company_col] = max(companies, key=len)
     
-    # For outcome, strongly prefer valid outcomes over empty ones
+    # Meeting outcome - take the best priority, but prefer "Completed" over "Scheduled"
     if outcome_col in group_df.columns:
-        outcomes = group_df[outcome_col].fillna("").astype(str)
-        best_outcome = ""
-        best_priority = -1
-        
-        for outcome in outcomes:
-            # Skip canceled outcomes - they should be filtered out already
-            if outcome == "Canceled":
-                continue
-                
-            priority = OUTCOME_PRIORITY.get(outcome, 0)
-            if outcome and outcome not in ['', 'nan', '<NA>', 'None'] and priority > best_priority:
-                best_priority = priority
-                best_outcome = outcome
-        
-        if best_outcome:
+        outcomes = [str(val).strip() for val in group_df[outcome_col] if str(val).strip() not in ['', 'nan', '<NA>', 'None']]
+        if outcomes:
+            # Custom priority that prefers "Completed" over "Scheduled"
+            def outcome_priority(outcome):
+                if outcome == "Completed": return 10
+                elif outcome == "No Show": return 9  
+                elif outcome == "Rescheduled": return 8
+                elif outcome == "Scheduled": return 7  # Lower than completed
+                else: return 0
+            
+            best_outcome = max(outcomes, key=outcome_priority)
             merged[outcome_col] = best_outcome
+    
+    # Call and meeting type - take the best non-empty value
+    if 'call_and_meeting_type' in group_df.columns:
+        call_types = [_safe_str(val) for val in group_df['call_and_meeting_type'] if _safe_str(val)]
+        if call_types:
+            # Prefer more specific types over generic ones
+            specific_types = [ct for ct in call_types if ct.lower() not in ['call', 'meeting']]
+            merged['call_and_meeting_type'] = specific_types[0] if specific_types else call_types[0]
+    
+    # Meeting type - take the best non-empty value  
+    if 'meeting_type' in group_df.columns:
+        meeting_types = [_safe_str(val) for val in group_df['meeting_type'] if _safe_str(val)]
+        if meeting_types:
+            merged['meeting_type'] = meeting_types[0]
+    
+    # Body preview - take the longest one (most detail)
+    if 'body_preview' in group_df.columns:
+        previews = [_safe_str(val) for val in group_df['body_preview'] if _safe_str(val)]
+        if previews:
+            merged['body_preview'] = max(previews, key=len)
+    
+    # Meeting source - prefer CRM UI over sync
+    if 'meeting_source' in group_df.columns:
+        sources = [_safe_str(val) for val in group_df['meeting_source'] if _safe_str(val)]
+        if sources:
+            crm_sources = [s for s in sources if 'CRM UI' in s]
+            merged['meeting_source'] = crm_sources[0] if crm_sources else sources[0]
     
     # Remove the scoring column
     if '_data_score' in merged:
@@ -497,6 +521,15 @@ def deduplicate_meetings(df: pd.DataFrame) -> pd.DataFrame:
         canceled_removed = before_cancel_filter - len(result)
         if canceled_removed > 0:
             logger.info(f"Filtered out {canceled_removed} canceled meetings")
+
+    # ADD FLAG for dashboard filtering - only "Completed" meetings count as meetings that happened
+    if outcome_col in result.columns:
+        result["_counts_as_meeting"] = result[outcome_col] == "Completed"
+        completed_meetings = result["_counts_as_meeting"].sum()
+        total_meetings = len(result)
+        logger.info(f"Meeting counting: {completed_meetings} completed out of {total_meetings} total meetings")
+    else:
+        result["_counts_as_meeting"] = True  # If no outcome column, assume all count
 
     # DEBUG: Check INSA meetings after dedup
     insa_after = result[result.get(company_col, "") == "INSA"]
