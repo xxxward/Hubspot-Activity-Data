@@ -457,6 +457,17 @@ def deduplicate_meetings(df: pd.DataFrame) -> pd.DataFrame:
                 processed_indices.add(idx2)
                 if company_val == "INSA":
                     logger.info(f"  DEBUG: Pattern 3 match - {idx2}: '{row2['_norm_name']}'")
+            
+            # DETAILED DEBUGGING for INSA meetings that should match but don't
+            elif company_val == "INSA" and row2["_company"] == "INSA":
+                logger.info(f"  DEBUG: INSA {idx} vs {idx2} - checking conditions:")
+                logger.info(f"    norm_name1='{norm_name}' norm_name2='{row2['_norm_name']}'")
+                logger.info(f"    date1={date_val} date2={row2['_date']} match={date_val == row2['_date']}")
+                logger.info(f"    rep1='{rep_val}' rep2='{row2['_rep']}' match={rep_val == row2['_rep']}")
+                logger.info(f"    company1='{company_val}' company2='{row2['_company']}' match={company_val == row2['_company']}")
+                name_condition = (norm_name and not row2["_norm_name"]) or (not norm_name and row2["_norm_name"])
+                logger.info(f"    name_condition={name_condition}")
+                logger.info(f"    SHOULD MATCH: {name_condition and date_val == row2['_date'] and rep_val == row2['_rep'] and company_val == row2['_company']}")
 
         # Include the original row
         candidates.append(idx)
