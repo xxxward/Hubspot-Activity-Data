@@ -879,8 +879,8 @@ REP_COACHING = {
         "voice": """COACHING TONE FOR JAKE: Jake is a senior AM — treat him as a peer, not a direct report. Use collaborative language: "what if we tried...", "one angle worth exploring...", "thinking about this together...". He's strategic and wants to understand the WHY behind the recommendation. Connect the dots between activity patterns and business outcomes. Respect his experience — frame suggestions as options, not instructions.""",
     },
     "Dave Borkowski": {
-        "tone": "direct_accountability",
-        "voice": """COACHING TONE FOR DAVE: Dave responds best to direct, candid accountability. Don't sugarcoat, don't plant seeds — come down hard. He respects it and takes action when called out specifically. Use phrases like "I'm not seeing follow-up on...", "this is unacceptable given what you committed to...", "you told Kyle you'd prioritize proactive follow-ups and increased call activity — the data says otherwise." Reference specific deals and specific gaps. Dave committed to: (1) proactive follow-ups after every meeting, (2) increased call activity, (3) clearer tracking to prevent gaps, (4) staying ahead of key accounts and maintaining stronger momentum. Hold him to EVERY ONE of these commitments. If he's falling short, say so directly. He will appreciate the candor and act on it.""",
+        "tone": "direct_supportive",
+        "voice": """COACHING TONE FOR DAVE: Dave responds well to direct, honest feedback paired with clear expectations. He appreciates straightforward communication and takes ownership when given specific, constructive guidance. Use phrases like "Dave, I noticed [deal] hasn't had follow-up since [date] — what's your read on where they stand?", "You've been making progress on the commitments you set — let's keep that momentum going on [deal]." Reference specific deals and specific opportunities. Dave committed to: (1) proactive follow-ups after every meeting, (2) increased call activity, (3) clearer tracking to prevent gaps, (4) staying ahead of key accounts and maintaining stronger momentum. Reference these commitments positively — acknowledge progress and guide on gaps. Frame patterns as opportunities: "I'm seeing more email activity than calls lately — might be worth mixing in some phone outreach to break through." Be specific and direct, but supportive. He takes action when he sees the path forward clearly.""",
     },
     "Alex Gonzalez": {
         "tone": "executive_brief",
@@ -2800,13 +2800,13 @@ For Jake Lynch (Senior AM — collaborative, strategic thinker):
 - If he's stuck on a deal, offer to co-strategize or make a joint call. He values partnership.
 - When Jake's deals are healthy, acknowledge it — "your engagement on [deal] is exactly the model."
 
-For Dave Borkowski (AM — needs direct accountability, responds to being called out):
-- Dave responds best to candid, specific feedback. Don't soften it — he respects directness and takes action.
-- Dave committed to Kyle on Feb 9 that he would: prioritize proactive follow-ups, increase call activity, track more clearly, and stay ahead of key accounts. HOLD HIM TO THESE COMMITMENTS.
-- In your 1:1, be specific: "Dave, you committed to proactive follow-ups after every meeting. I'm seeing [X deal] with no follow-up since [date]. What happened?"
-- Call out the pattern, not just the instance: "I'm seeing 4 emails and no calls again. We talked about this."
-- When he's executing well, acknowledge it — but don't let up. "Good follow-up on [deal]. Now let's make sure [other deal] gets the same treatment."
-- Dave takes ownership when confronted directly. He'll say "you're right, I'll address it tomorrow" — your job is to check that he actually did.
+For Dave Borkowski (AM — direct communicator, responds to clear expectations):
+- Dave responds well to honest, specific feedback paired with support. He appreciates straightforward communication and takes ownership.
+- Dave committed to Kyle on Feb 9 that he would: prioritize proactive follow-ups, increase call activity, track more clearly, and stay ahead of key accounts. Reference these commitments positively and acknowledge progress.
+- In your 1:1, be specific but supportive: "Dave, I noticed [X deal] hasn't had follow-up since [date] — what's your read on where they stand?"
+- Frame patterns as opportunities: "I'm seeing more email activity than calls on a few deals — might be worth mixing in some phone outreach to break through."
+- When he's executing well, acknowledge it genuinely: "Great follow-up cadence on [deal] — that's exactly the kind of engagement that moves deals forward."
+- Dave takes ownership when given clear, constructive guidance. Follow up on commitments as a partnership: "How did the follow-up on [deal] go? Anything I can help with?"
 """,
             },
             "Alex Gonzalez": {
