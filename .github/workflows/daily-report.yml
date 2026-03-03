@@ -1,0 +1,51 @@
+name: Daily Activity Report (5 PM MST)
+
+on:
+  schedule:
+    # 5:00 PM MST = 00:00 UTC next day (MST is UTC-7)
+    # During MDT (Mar-Nov), 5 PM MDT = 23:00 UTC same day
+    - cron: "0 0 * * 1-5"   # Midnight UTC = 5 PM MST, weekdays only
+  workflow_dispatch:
+    inputs:
+      test_rep:
+        description: "Test mode — enter a rep name (e.g. Brad Sherman) to send only their report to xward. Leave blank for normal run."
+        required: false
+        default: ""
+
+jobs:
+  send-daily-report:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hubspot-analytics
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: hubspot-analytics/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run daily report
+        env:
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+        run: |
+          if [ -n "${{ github.event.inputs.test_rep }}" ]; then
+            python daily_report.py --test "${{ github.event.inputs.test_rep }}"
+          else
+            python daily_report.py
+          fi
