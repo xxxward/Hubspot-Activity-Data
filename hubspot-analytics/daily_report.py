@@ -6,6 +6,7 @@ Summarizes TODAY's activity for each rep, highlights positives,
 provides encouragement, and emails the team.
 """
 
+import argparse
 import json
 import logging
 import os
@@ -493,6 +494,14 @@ def send_email(to: str, subject: str, html_body: str, cc: list[str] | None = Non
 # ═══════════════════════════════════════════════════════════════════════
 
 def main():
+    parser = argparse.ArgumentParser(description="Daily Activity Report")
+    parser.add_argument(
+        "--test",
+        metavar="REP_NAME",
+        help="Test mode: generate report for one rep and send only to xward@calyxcontainers.com (no CC, no manager email)",
+    )
+    args = parser.parse_args()
+
     setup_logging()
 
     # Today in MST
@@ -501,6 +510,11 @@ def main():
     today_ts = pd.Timestamp(today)
     today_str = today.strftime("%A, %B %d, %Y")
 
+    test_mode = args.test is not None
+    test_rep = args.test
+
+    if test_mode:
+        logger.info("=== TEST MODE: Report for %s → xward@calyxcontainers.com ===", test_rep)
     logger.info("=== Daily Report for %s (MST) ===", today_str)
 
     # 1. Load data
@@ -508,7 +522,10 @@ def main():
     datasets = load_data()
 
     # 2. Build context for each rep (skip CEO — Alex)
-    reps_to_report = [r for r in REPS_IN_SCOPE if r in REP_EMAILS]
+    if test_mode:
+        reps_to_report = [test_rep]
+    else:
+        reps_to_report = [r for r in REPS_IN_SCOPE if r in REP_EMAILS]
     all_rep_data: dict[str, dict] = {}
 
     for rep in reps_to_report:
@@ -530,21 +547,29 @@ def main():
             client, rep, all_rep_data[rep]["context"]
         )
 
-    # 4. Generate team summary for managers
-    logger.info("Generating team summary...")
-    team_summary = generate_team_summary(client, all_rep_data, today_str)
+    # 4. Generate team summary for managers (skip in test mode)
+    if not test_mode:
+        logger.info("Generating team summary...")
+        team_summary = generate_team_summary(client, all_rep_data, today_str)
 
     # 5. Send individual rep emails
     for rep in reps_to_report:
         subject = f"Your Daily Wins — {today.strftime('%A, %b %d')}"
+        if test_mode:
+            subject = f"[TEST] {subject}"
         html = build_email_html(rep, all_rep_data[rep], rep_summaries[rep], today_str)
-        send_email(to=REP_EMAILS[rep], subject=subject, html_body=html)
 
-    # 6. Send manager summary
-    manager_subject = f"Team Daily Wins — {today.strftime('%A, %b %d')}"
-    manager_html = build_manager_email_html(team_summary, all_rep_data, today_str)
-    for manager_email in CC_EMAILS:
-        send_email(to=manager_email, subject=manager_subject, html_body=manager_html)
+        if test_mode:
+            send_email(to="xward@calyxcontainers.com", subject=subject, html_body=html)
+        else:
+            send_email(to=REP_EMAILS[rep], subject=subject, html_body=html)
+
+    # 6. Send manager summary (skip in test mode)
+    if not test_mode:
+        manager_subject = f"Team Daily Wins — {today.strftime('%A, %b %d')}"
+        manager_html = build_manager_email_html(team_summary, all_rep_data, today_str)
+        for manager_email in CC_EMAILS:
+            send_email(to=manager_email, subject=manager_subject, html_body=manager_html)
 
     logger.info("=== Daily Report Complete ===")
 
