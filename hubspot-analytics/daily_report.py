@@ -460,7 +460,19 @@ def build_manager_email_html(team_summary: str, all_rep_data: dict[str, dict], t
 # ═══════════════════════════════════════════════════════════════════════
 
 def send_email(to: str, subject: str, html_body: str, cc: list[str] | None = None) -> None:
-    """Send one email via SMTP."""
+    """Send one email via SMTP.
+
+    If the TEST_EMAIL_OVERRIDE env var is set, ALL emails are redirected to
+    that address (CC is cleared).  This lets you review every report yourself
+    before going live.
+    """
+    override = os.environ.get("TEST_EMAIL_OVERRIDE", "").strip()
+    if override:
+        logger.info("TEST_EMAIL_OVERRIDE active — redirecting %s → %s", to, override)
+        subject = f"[TEST → {to}] {subject}"
+        to = override
+        cc = None
+
     smtp_host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
     smtp_port = int(os.environ.get("SMTP_PORT", "587"))
     smtp_user = os.environ.get("SMTP_USER", "")
