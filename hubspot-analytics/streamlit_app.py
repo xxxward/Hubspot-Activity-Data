@@ -446,7 +446,7 @@ C = {
     "tasks": "#fbbf24", "completed_tasks": "#fbbf24", "notes": "#9b93b7",
     "tickets": "#fb7185", "overdue": "#fb7185",
     "active": "#34d399", "stale": "#fbbf24", "inactive": "#fb7185", "none": "#6a6283",
-    "gong": "#67e8f9", "score": "#a78bfa",
+    "gong": "#67e8f9", "score": "#a78bfa", "green": "#34d399", "purple": "#c084fc",
 }
 
 # Activity → accent class for KPI cards
