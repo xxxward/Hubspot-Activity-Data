@@ -22,6 +22,14 @@ from src.metrics.scoring import compute_activity_score, compute_activity_score_b
 
 logger = logging.getLogger(__name__)
 
+try:
+    from src.gong.gong_client import fetch_gong_enrichment, map_gong_to_rep, is_gong_configured
+except ImportError:
+    logger.warning("Gong client not available — skipping Gong integration.")
+    def fetch_gong_enrichment(*a, **kw): return pd.DataFrame()
+    def map_gong_to_rep(name): return name
+    def is_gong_configured(): return False
+
 
 @dataclass
 class AnalyticsData:
@@ -35,6 +43,9 @@ class AnalyticsData:
     emails: pd.DataFrame = field(default_factory=pd.DataFrame)
     notes: pd.DataFrame = field(default_factory=pd.DataFrame)
     new_pipeline: pd.DataFrame = field(default_factory=pd.DataFrame)
+
+    # Gong call intelligence
+    gong_calls: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     # Activity counts
     activity_counts_daily: pd.DataFrame = field(default_factory=pd.DataFrame)
@@ -123,6 +134,23 @@ def load_all() -> AnalyticsData:
     tickets = norm.get("tickets", pd.DataFrame())
     new_pipeline = apply_activity_filters(norm.get("new_pipeline", pd.DataFrame()))
 
+    # 6b - Gong call intelligence (optional)
+    gong_calls = pd.DataFrame()
+    if is_gong_configured():
+        logger.info("Fetching Gong call data...")
+        try:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            gong_calls = fetch_gong_enrichment(datetime.now(ZoneInfo("America/Denver")))
+            if not gong_calls.empty:
+                gong_calls["hubspot_owner_name"] = gong_calls["gong_user_name"].apply(map_gong_to_rep)
+                logger.info("Gong: %d calls loaded.", len(gong_calls))
+        except Exception as e:
+            logger.warning("Gong fetch failed (continuing without): %s", e)
+            gong_calls = pd.DataFrame()
+    else:
+        logger.info("Gong not configured — skipping.")
+
     # 7 - Metrics
     logger.info("Computing activity metrics...")
     activity = count_activities(calls, meetings, tasks, emails)
@@ -140,6 +168,7 @@ def load_all() -> AnalyticsData:
 
     data = AnalyticsData(
         deals=deals, meetings=meetings, tasks=tasks, tickets=tickets, calls=calls, emails=emails, notes=notes, new_pipeline=new_pipeline,
+        gong_calls=gong_calls,
         activity_counts_daily=activity.get("activity_counts_daily", pd.DataFrame()),
         activity_counts_weekly=weekly,
         activity_counts_monthly=activity.get("activity_counts_monthly", pd.DataFrame()),

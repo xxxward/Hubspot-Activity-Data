@@ -43,6 +43,10 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          TEST_EMAIL_OVERRIDE: ${{ secrets.TEST_EMAIL_OVERRIDE }}
+          GONG_ACCESS_KEY: ${{ secrets.GONG_ACCESS_KEY }}
+          GONG_SECRET_KEY: ${{ secrets.GONG_SECRET_KEY }}
+          GONG_BASE_URL: ${{ secrets.GONG_BASE_URL }}
         run: |
           if [ -n "${{ github.event.inputs.test_rep }}" ]; then
             python daily_report.py --test "${{ github.event.inputs.test_rep }}"
