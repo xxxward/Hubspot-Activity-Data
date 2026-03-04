@@ -507,7 +507,7 @@ NAV_SECTIONS = [
     ("tasks",   "✅", "Tasks"),
     ("notes",   "📝", "Notes"),
     ("tickets", "🎫", "Tickets"),
-    ("gong",    "🎙️", "Gong Intelligence"),
+    ("gong",    "🎙", "Gong Intelligence"),
     ("deals",   "🏥", "Deal Health"),
 ]
 

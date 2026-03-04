@@ -19,9 +19,16 @@ from src.metrics.activity import count_activities, build_combined_activity_log
 from src.metrics.pipeline import pipeline_summary
 from src.metrics.terminal import terminal_summary
 from src.metrics.scoring import compute_activity_score, compute_activity_score_by_period
-from src.gong.gong_client import fetch_gong_enrichment, map_gong_to_rep, is_gong_configured
 
 logger = logging.getLogger(__name__)
+
+try:
+    from src.gong.gong_client import fetch_gong_enrichment, map_gong_to_rep, is_gong_configured
+except ImportError:
+    logger.warning("Gong client not available — skipping Gong integration.")
+    def fetch_gong_enrichment(*a, **kw): return pd.DataFrame()
+    def map_gong_to_rep(name): return name
+    def is_gong_configured(): return False
 
 
 @dataclass
