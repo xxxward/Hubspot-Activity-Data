@@ -34,6 +34,7 @@ from src.parsing.normalize import (
 from src.parsing.filters import (
     apply_deal_filters, apply_activity_filters, REPS_IN_SCOPE,
 )
+from src.gong.gong_client import fetch_gong_enrichment, map_gong_to_rep
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +145,8 @@ def _safe_num(val, default=0):
 # BUILD CONTEXT FOR EACH REP
 # ═══════════════════════════════════════════════════════════════════════
 
-def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp) -> dict:
+def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp,
+                      gong_df: pd.DataFrame | None = None) -> dict:
     """
     Build activity context for one rep for TODAY.
     Returns a dict with counts and context string for the AI.
@@ -249,6 +251,49 @@ def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp) -> 
             context += f"${_safe_num(deal.get('amount', 0)):,.0f} — {deal.get('deal_stage', '')}\n"
         context += "\n"
 
+    # Gong call intelligence enrichment
+    gong_calls: list[dict] = []
+    if gong_df is not None and not gong_df.empty:
+        rep_gong = gong_df[gong_df["hubspot_owner_name"] == rep_name]
+        if not rep_gong.empty:
+            context += f"GONG CALL INTELLIGENCE ({len(rep_gong)} calls recorded):\n"
+            for _, gc in rep_gong.iterrows():
+                title = gc.get("call_title", "Call")
+                company = gc.get("company_name", "")
+                duration_s = gc.get("call_duration_seconds", 0)
+                duration_min = round(duration_s / 60, 1) if duration_s else 0
+                talk_ratio = gc.get("talk_ratio")
+                topics = gc.get("topics", "")
+                questions = gc.get("question_count", 0)
+                direction = gc.get("call_direction", "")
+
+                context += f"  • {title}"
+                if company:
+                    context += f" ({company})"
+                context += f" — {duration_min} min"
+                if direction:
+                    context += f", {direction}"
+                if talk_ratio is not None:
+                    context += f", talk ratio: {talk_ratio:.0%}"
+                if questions:
+                    context += f", {questions} questions asked"
+                context += "\n"
+                if topics:
+                    context += f"    Topics: {topics}\n"
+
+                # Store for email display
+                gong_calls.append({
+                    "title": title,
+                    "company": company,
+                    "duration_min": duration_min,
+                    "talk_ratio": talk_ratio,
+                    "topics": topics,
+                    "question_count": questions,
+                    "direction": direction,
+                    "transcript_preview": gc.get("transcript_preview", ""),
+                })
+            context += "\n"
+
     return {
         "context": context,
         "today_total": today_total,
@@ -261,6 +306,7 @@ def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp) -> 
         "week_total": week_total,
         "companies_touched": len(today_companies),
         "meeting_details": meeting_details,
+        "gong_calls": gong_calls,
     }
 
 
@@ -366,6 +412,47 @@ def build_email_html(rep_name: str, rep_data: dict, ai_text: str, today_str: str
             <span style="font-size:20px; font-weight:700; color:#ede9fc; margin-left:12px;">{rep_data['companies_touched']}</span>
         </div>"""
 
+    # Gong call intelligence section
+    gong_section = ""
+    gong_calls = rep_data.get("gong_calls", [])
+    if gong_calls:
+        gong_rows = ""
+        for gc in gong_calls:
+            talk_pct = f"{gc['talk_ratio']:.0%}" if gc.get("talk_ratio") is not None else "—"
+            topics_str = gc.get("topics", "") or "—"
+            gong_rows += f"""
+            <tr style="border-bottom:1px solid #2d2750;">
+                <td style="padding:8px 10px; color:#ede9fc; font-size:13px;">{gc['title']}<br><span style="font-size:11px; color:#6a6283;">{gc.get('company', '')}</span></td>
+                <td style="padding:8px 6px; text-align:center; color:#818cf8; font-size:13px;">{gc['duration_min']}m</td>
+                <td style="padding:8px 6px; text-align:center; color:#34d399; font-size:13px;">{talk_pct}</td>
+                <td style="padding:8px 6px; text-align:center; color:#fbbf24; font-size:13px;">{gc.get('question_count', 0)}</td>
+            </tr>"""
+            if topics_str != "—":
+                gong_rows += f"""
+            <tr style="border-bottom:1px solid #1e1a35;">
+                <td colspan="4" style="padding:4px 10px 8px; font-size:11px; color:#9b93b7;">Topics: {topics_str}</td>
+            </tr>"""
+
+        gong_section = f"""
+    <!-- Gong Call Intelligence -->
+    <div style="padding:0 24px 24px;">
+        <div style="background:#1e1a35; border-radius:12px; overflow:hidden; border:1px solid #2d2750;">
+            <div style="padding:12px 16px; background:rgba(52,211,153,0.1); border-bottom:1px solid #2d2750;">
+                <span style="font-size:12px; color:#34d399; text-transform:uppercase; letter-spacing:1px; font-weight:700;">Gong Call Intelligence</span>
+                <span style="font-size:11px; color:#6a6283; margin-left:8px;">{len(gong_calls)} calls recorded</span>
+            </div>
+            <table width="100%" cellpadding="0" cellspacing="0">
+            <tr style="background:#0c0a1a;">
+                <th style="padding:8px 10px; text-align:left; color:#6a6283; font-size:10px; text-transform:uppercase;">Call</th>
+                <th style="padding:8px 6px; text-align:center; color:#6a6283; font-size:10px; text-transform:uppercase;">Dur</th>
+                <th style="padding:8px 6px; text-align:center; color:#6a6283; font-size:10px; text-transform:uppercase;">Talk%</th>
+                <th style="padding:8px 6px; text-align:center; color:#6a6283; font-size:10px; text-transform:uppercase;">Q's</th>
+            </tr>
+            {gong_rows}
+            </table>
+        </div>
+    </div>"""
+
     # Week context
     week_note = f"Rolling 7-day total: {rep_data['week_total']} touchpoints"
 
@@ -396,6 +483,8 @@ def build_email_html(rep_name: str, rep_data: dict, ai_text: str, today_str: str
         </div>
         {companies_section}
     </div>
+
+    {gong_section}
 
     <!-- Footer -->
     <div style="padding:16px 24px; text-align:center; border-top:1px solid #2d2750;">
@@ -555,6 +644,22 @@ def main():
     logger.info("Loading HubSpot data...")
     datasets = load_data()
 
+    # 1b. Fetch Gong call intelligence (optional — skipped if creds not set)
+    gong_df = pd.DataFrame()
+    if os.environ.get("GONG_ACCESS_KEY") and os.environ.get("GONG_SECRET_KEY"):
+        logger.info("Fetching Gong call data...")
+        try:
+            gong_df = fetch_gong_enrichment(now_mst)
+            if not gong_df.empty:
+                # Map Gong user names to HubSpot rep names
+                gong_df["hubspot_owner_name"] = gong_df["gong_user_name"].apply(map_gong_to_rep)
+                logger.info("Gong enrichment: %d calls loaded.", len(gong_df))
+        except Exception as e:
+            logger.warning("Gong fetch failed (continuing without): %s", e)
+            gong_df = pd.DataFrame()
+    else:
+        logger.info("Gong credentials not set — skipping call intelligence.")
+
     # 2. Build context for each rep (skip CEO — Alex)
     if test_mode:
         reps_to_report = [test_rep]
@@ -564,7 +669,10 @@ def main():
 
     for rep in reps_to_report:
         logger.info("Building context for %s...", rep)
-        all_rep_data[rep] = build_rep_context(datasets, rep, today_ts)
+        all_rep_data[rep] = build_rep_context(
+            datasets, rep, today_ts,
+            gong_df=gong_df if not gong_df.empty else None,
+        )
 
     # 3. Generate AI encouragement for each rep
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
