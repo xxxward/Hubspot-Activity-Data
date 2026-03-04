@@ -507,6 +507,7 @@ NAV_SECTIONS = [
     ("tasks",   "✅", "Tasks"),
     ("notes",   "📝", "Notes"),
     ("tickets", "🎫", "Tickets"),
+    ("gong",    "🎙️", "Gong Intelligence"),
     ("deals",   "🏥", "Deal Health"),
 ]
 
@@ -519,6 +520,7 @@ _counts = {
     "tasks": len(data.tasks) if not data.tasks.empty else 0,
     "notes": len(data.notes) if not data.notes.empty else 0,
     "tickets": len(data.tickets) if not data.tickets.empty else 0,
+    "gong": len(data.gong_calls) if not data.gong_calls.empty else 0,
     "deals": len(data.deals) if not data.deals.empty else 0,
 }
 
@@ -2152,6 +2154,121 @@ elif st.session_state.page == "notes":
                 fn_display["note_body"] = fn_display["note_body"].astype(str).str.replace(r'<[^>]+>', '', regex=True).str[:200]
             st.dataframe(_display_df(_safe_sort(fn_display, note_cols[0])),
                          use_container_width=True, hide_index=True)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# PAGE: 🎙️ GONG INTELLIGENCE
+# ════════════════════════════════════════════════════════════════════════
+elif st.session_state.page == "gong":
+
+    st.markdown("""<div class="page-header">
+        <h1>🎙️ Gong Call Intelligence</h1>
+        <p class="page-sub">AI-enriched call analytics — talk ratios, topics, and conversation insights.</p>
+    </div>""", unsafe_allow_html=True)
+
+    fg = data.gong_calls
+    if fg.empty:
+        empty_state("No Gong data available. Add GONG_ACCESS_KEY and GONG_SECRET_KEY to your secrets to enable. 🎙️")
+    else:
+        # Apply rep filter if gong data has hubspot_owner_name
+        if "hubspot_owner_name" in fg.columns:
+            fg = _frep(fg)
+
+        n_gong = len(fg)
+        avg_duration = 0
+        if "call_duration_seconds" in fg.columns:
+            dur = pd.to_numeric(fg["call_duration_seconds"], errors="coerce")
+            avg_duration = dur.mean() / 60 if dur.notna().any() else 0
+
+        avg_talk = None
+        if "talk_ratio" in fg.columns:
+            tr = pd.to_numeric(fg["talk_ratio"], errors="coerce")
+            avg_talk = tr.mean() if tr.notna().any() else None
+
+        avg_questions = 0
+        if "question_count" in fg.columns:
+            avg_questions = pd.to_numeric(fg["question_count"], errors="coerce").mean()
+
+        kpi_items = [
+            ("Recorded Calls", f"{n_gong:,}", "cyan"),
+            ("Avg Duration", f"{avg_duration:.0f} min", "blue"),
+        ]
+        if avg_talk is not None:
+            kpi_items.append(("Avg Talk Ratio", f"{avg_talk:.0%}", "green"))
+        kpi_items.append(("Avg Questions", f"{avg_questions:.1f}", "amber"))
+        kpi(kpi_items)
+
+        section_divider()
+
+        # Charts row
+        gc1, gc2 = st.columns(2)
+        with gc1:
+            section_header("👤", "Calls by Rep", C.get("gong", "#67e8f9"))
+            if "hubspot_owner_name" in fg.columns:
+                rep_counts = fg["hubspot_owner_name"].value_counts().reset_index()
+                rep_counts.columns = ["Rep", "Calls"]
+                fig = px.bar(rep_counts, x="Rep", y="Calls", color_discrete_sequence=[C.get("gong", "#67e8f9")])
+                fig.update_layout(xaxis_title="", yaxis_title="")
+                st.plotly_chart(styled_fig(fig, 280), use_container_width=True)
+
+        with gc2:
+            section_header("⏱️", "Call Duration Distribution", C.get("gong", "#67e8f9"))
+            if "call_duration_seconds" in fg.columns:
+                dur_min = pd.to_numeric(fg["call_duration_seconds"], errors="coerce") / 60
+                dur_df = pd.DataFrame({"Duration (min)": dur_min.dropna()})
+                fig = px.histogram(dur_df, x="Duration (min)", nbins=15, color_discrete_sequence=[C.get("gong", "#67e8f9")])
+                fig.update_layout(xaxis_title="Minutes", yaxis_title="Count")
+                st.plotly_chart(styled_fig(fig, 280), use_container_width=True)
+
+        section_divider()
+
+        gc3, gc4 = st.columns(2)
+        with gc3:
+            section_header("🗣️", "Talk Ratio by Rep", C["green"])
+            if "talk_ratio" in fg.columns and "hubspot_owner_name" in fg.columns:
+                tr_data = fg[["hubspot_owner_name", "talk_ratio"]].copy()
+                tr_data["talk_ratio"] = pd.to_numeric(tr_data["talk_ratio"], errors="coerce")
+                tr_data = tr_data.dropna()
+                if not tr_data.empty:
+                    avg_by_rep = tr_data.groupby("hubspot_owner_name")["talk_ratio"].mean().reset_index()
+                    avg_by_rep.columns = ["Rep", "Talk Ratio"]
+                    avg_by_rep["Talk %"] = avg_by_rep["Talk Ratio"] * 100
+                    fig = px.bar(avg_by_rep, x="Rep", y="Talk %", color_discrete_sequence=[C["green"]])
+                    fig.update_layout(xaxis_title="", yaxis_title="Talk %")
+                    fig.add_hline(y=50, line_dash="dash", line_color="#6a6283", annotation_text="50%")
+                    st.plotly_chart(styled_fig(fig, 280), use_container_width=True)
+
+        with gc4:
+            section_header("💬", "Top Topics Discussed", C["purple"])
+            if "topics" in fg.columns:
+                all_topics = fg["topics"].dropna().str.split(", ").explode().str.strip()
+                all_topics = all_topics[all_topics != ""]
+                if not all_topics.empty:
+                    top_topics = all_topics.value_counts().head(10).reset_index()
+                    top_topics.columns = ["Topic", "Count"]
+                    fig = px.bar(top_topics, y="Topic", x="Count", orientation="h",
+                                 color_discrete_sequence=[C["purple"]])
+                    fig.update_layout(xaxis_title="", yaxis_title="", yaxis=dict(autorange="reversed"))
+                    st.plotly_chart(styled_fig(fig, 280), use_container_width=True)
+                else:
+                    st.caption("No topic data available yet.")
+
+        section_divider()
+
+        # Detail table
+        section_header("📋", "All Gong Calls", C.get("gong", "#67e8f9"))
+        gong_cols = [c for c in ("call_start", "hubspot_owner_name", "company_name", "call_title",
+                                  "call_duration_seconds", "call_direction", "talk_ratio",
+                                  "question_count", "topics", "trackers") if c in fg.columns]
+        if gong_cols:
+            fg_display = fg[gong_cols].copy()
+            if "call_duration_seconds" in fg_display.columns:
+                fg_display["call_duration_seconds"] = (pd.to_numeric(fg_display["call_duration_seconds"], errors="coerce") / 60).round(1)
+                fg_display = fg_display.rename(columns={"call_duration_seconds": "duration_min"})
+            if "talk_ratio" in fg_display.columns:
+                fg_display["talk_ratio"] = pd.to_numeric(fg_display["talk_ratio"], errors="coerce").apply(
+                    lambda x: f"{x:.0%}" if pd.notna(x) else "—")
+            st.dataframe(_display_df(fg_display), use_container_width=True, hide_index=True)
 
 
 # ════════════════════════════════════════════════════════════════════════

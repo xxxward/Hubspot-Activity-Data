@@ -22,9 +22,21 @@ MST = ZoneInfo("America/Denver")
 DEFAULT_BASE_URL = "https://us-9297.api.gong.io"
 
 
+def _get_secret(key: str, default: str = "") -> str:
+    """Read a secret from env vars first, then Streamlit secrets as fallback."""
+    val = os.environ.get(key, "")
+    if val:
+        return val
+    try:
+        import streamlit as st
+        return st.secrets.get(key, default)
+    except Exception:
+        return default
+
+
 def _get_auth_header() -> dict[str, str]:
-    access_key = os.environ.get("GONG_ACCESS_KEY", "")
-    secret_key = os.environ.get("GONG_SECRET_KEY", "")
+    access_key = _get_secret("GONG_ACCESS_KEY")
+    secret_key = _get_secret("GONG_SECRET_KEY")
     if not access_key or not secret_key:
         raise EnvironmentError("GONG_ACCESS_KEY and GONG_SECRET_KEY must be set.")
     token = base64.b64encode(f"{access_key}:{secret_key}".encode()).decode()
@@ -35,7 +47,7 @@ def _get_auth_header() -> dict[str, str]:
 
 
 def _base_url() -> str:
-    return os.environ.get("GONG_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
+    return _get_secret("GONG_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
 
 
 # ─── List calls for a date range ────────────────────────────────────
@@ -318,3 +330,8 @@ def map_gong_to_rep(gong_name: str) -> str:
     if gong_name in GONG_TO_REP_NAME:
         return GONG_TO_REP_NAME[gong_name]
     return gong_name  # assume names match
+
+
+def is_gong_configured() -> bool:
+    """Check whether Gong API credentials are available."""
+    return bool(_get_secret("GONG_ACCESS_KEY") and _get_secret("GONG_SECRET_KEY"))
