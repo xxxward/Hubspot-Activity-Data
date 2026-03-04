@@ -108,6 +108,7 @@ def load_data():
         "tasks": apply_activity_filters(norm.get("tasks", pd.DataFrame())),
         "emails": apply_activity_filters(norm.get("emails", pd.DataFrame())),
         "notes": apply_activity_filters(norm.get("notes", pd.DataFrame())),
+        "tickets": apply_activity_filters(norm.get("tickets", pd.DataFrame())),
     }
 
 
@@ -157,27 +158,35 @@ def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp) -> 
     rep_emails = _filter_rep(datasets["emails"], rep_name)
     rep_tasks = _filter_rep(datasets["tasks"], rep_name)
     rep_deals = _filter_rep(datasets["deals"], rep_name)
+    rep_tickets = _filter_rep(datasets.get("tickets", pd.DataFrame()), rep_name)
+    rep_notes = _filter_rep(datasets.get("notes", pd.DataFrame()), rep_name)
 
     # Today's activity
     today_meetings = _filter_by_date(rep_meetings, "meeting_start_time", today_ts, today_ts)
     today_calls = _filter_by_date(rep_calls, "activity_date", today_ts, today_ts)
     today_emails = _filter_by_date(rep_emails, "activity_date", today_ts, today_ts)
     today_tasks = _filter_by_date(rep_tasks, "created_date", today_ts, today_ts)
+    today_tickets = _filter_by_date(rep_tickets, "created_date", today_ts, today_ts)
+    today_notes = _filter_by_date(rep_notes, "created_date", today_ts, today_ts)
 
     # This week's activity (rolling 7 days)
     week_meetings = _filter_by_date(rep_meetings, "meeting_start_time", week_start, today_ts)
     week_calls = _filter_by_date(rep_calls, "activity_date", week_start, today_ts)
     week_emails = _filter_by_date(rep_emails, "activity_date", week_start, today_ts)
     week_tasks = _filter_by_date(rep_tasks, "created_date", week_start, today_ts)
+    week_tickets = _filter_by_date(rep_tickets, "created_date", week_start, today_ts)
+    week_notes = _filter_by_date(rep_notes, "created_date", week_start, today_ts)
 
     # Previous week
     prev_meetings = _filter_by_date(rep_meetings, "meeting_start_time", prev_week_start, prev_week_end)
     prev_calls = _filter_by_date(rep_calls, "activity_date", prev_week_start, prev_week_end)
     prev_emails = _filter_by_date(rep_emails, "activity_date", prev_week_start, prev_week_end)
     prev_tasks = _filter_by_date(rep_tasks, "created_date", prev_week_start, prev_week_end)
+    prev_tickets = _filter_by_date(rep_tickets, "created_date", prev_week_start, prev_week_end)
+    prev_notes = _filter_by_date(rep_notes, "created_date", prev_week_start, prev_week_end)
 
     # Companies touched today
-    today_activity = pd.concat([today_meetings, today_calls, today_emails], ignore_index=True)
+    today_activity = pd.concat([today_meetings, today_calls, today_emails, today_tasks, today_tickets, today_notes], ignore_index=True)
     today_companies = set()
     if not today_activity.empty and "company_name" in today_activity.columns:
         today_companies = set(today_activity["company_name"].dropna().str.strip()) - {"", "nan"}
@@ -201,8 +210,8 @@ def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp) -> 
             meeting_details.append(f"{name} ({company}) — {outcome}")
 
     # Build context string
-    today_total = len(today_calls) + len(today_meetings) + len(today_emails) + len(today_tasks)
-    week_total = len(week_calls) + len(week_meetings) + len(week_emails) + len(week_tasks)
+    today_total = len(today_calls) + len(today_meetings) + len(today_emails) + len(today_tasks) + len(today_tickets) + len(today_notes)
+    week_total = len(week_calls) + len(week_meetings) + len(week_emails) + len(week_tasks) + len(week_tickets) + len(week_notes)
 
     role = REP_ROLES.get(rep_name, "acquisition")
     role_label = ROLE_LABELS.get(role, "Sales")
@@ -216,6 +225,8 @@ def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp) -> 
     context += f"  Calls: {len(today_calls)}\n"
     context += f"  Emails: {len(today_emails)}\n"
     context += f"  Tasks: {len(today_tasks)}\n"
+    context += f"  Tickets: {len(today_tickets)}\n"
+    context += f"  Notes: {len(today_notes)}\n"
     context += f"  Total touchpoints: {today_total}\n\n"
 
     if meeting_details:
@@ -228,8 +239,8 @@ def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp) -> 
         context += f"COMPANIES ENGAGED TODAY: {', '.join(sorted(today_companies))}\n\n"
 
     context += f"ROLLING 7-DAY CONTEXT:\n"
-    context += f"  This week: {len(week_calls)} calls, {len(week_meetings)} mtgs, {len(week_emails)} emails, {len(week_tasks)} tasks (total: {week_total})\n"
-    context += f"  Prev week: {len(prev_calls)} calls, {len(prev_meetings)} mtgs, {len(prev_emails)} emails, {len(prev_tasks)} tasks\n\n"
+    context += f"  This week: {len(week_meetings)} mtgs, {len(week_calls)} calls, {len(week_emails)} emails, {len(week_tasks)} tasks, {len(week_tickets)} tickets, {len(week_notes)} notes (total: {week_total})\n"
+    context += f"  Prev week: {len(prev_meetings)} mtgs, {len(prev_calls)} calls, {len(prev_emails)} emails, {len(prev_tasks)} tasks, {len(prev_tickets)} tickets, {len(prev_notes)} notes\n\n"
 
     if not active_deals.empty:
         context += f"DEALS CONNECTED TO TODAY'S ACTIVITY:\n"
@@ -245,6 +256,8 @@ def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp) -> 
         "today_calls": len(today_calls),
         "today_emails": len(today_emails),
         "today_tasks": len(today_tasks),
+        "today_tickets": len(today_tickets),
+        "today_notes": len(today_notes),
         "week_total": week_total,
         "companies_touched": len(today_companies),
         "meeting_details": meeting_details,
@@ -265,6 +278,7 @@ def generate_encouragement(client: anthropic.Anthropic, rep_name: str, context: 
 YOUR GOAL: Highlight positives, provide encouragement, and offer one small helpful insight. This is NOT a big-brother report — it's a daily win tracker and momentum builder.
 
 RULES:
+- PAY ATTENTION TO THE DATE in the report. The day of the week matters — do NOT say things like "great close to the week" unless it's actually Thursday or Friday. If it's Monday, reference the start of the week. If it's mid-week, reference mid-week momentum. Match your language to the actual day.
 - Lead with what went WELL today. Find the wins, no matter how small.
 - If activity was high, celebrate it. If it was low, note what WAS done and encourage tomorrow.
 - Mention specific companies or meetings by name when available — it shows you're paying attention.
@@ -291,7 +305,8 @@ def generate_team_summary(client: anthropic.Anthropic, all_rep_data: dict[str, d
         role = ROLE_LABELS.get(REP_ROLES.get(rep_name, "acquisition"), "Sales")
         team_context += f"{rep_name} ({role}): "
         team_context += f"{rep_data['today_meetings']} mtgs, {rep_data['today_calls']} calls, "
-        team_context += f"{rep_data['today_emails']} emails, {rep_data['today_tasks']} tasks "
+        team_context += f"{rep_data['today_emails']} emails, {rep_data['today_tasks']} tasks, "
+        team_context += f"{rep_data['today_tickets']} tickets, {rep_data['today_notes']} notes "
         team_context += f"({rep_data['today_total']} total)\n"
 
     total_team = sum(d["today_total"] for d in all_rep_data.values())
@@ -303,6 +318,7 @@ def generate_team_summary(client: anthropic.Anthropic, all_rep_data: dict[str, d
         system="""You are writing a brief team activity summary for sales managers at Calyx Containers.
 
 RULES:
+- PAY ATTENTION TO THE DATE. Match your language to the actual day of the week — don't say "great close to the week" on a Monday or Wednesday.
 - 2-3 sentences max. Highlight the team's wins and momentum.
 - Call out standout performers by name.
 - Keep it positive and forward-looking.
@@ -325,6 +341,8 @@ def build_email_html(rep_name: str, rep_data: dict, ai_text: str, today_str: str
         ("Calls", rep_data["today_calls"], "#818cf8"),
         ("Emails", rep_data["today_emails"], "#c084fc"),
         ("Tasks", rep_data["today_tasks"], "#fbbf24"),
+        ("Tickets", rep_data["today_tickets"], "#34d399"),
+        ("Notes", rep_data["today_notes"], "#fb923c"),
     ]
 
     stat_cards = ""
@@ -403,6 +421,8 @@ def build_manager_email_html(team_summary: str, all_rep_data: dict[str, dict], t
             <td style="padding:10px 8px; text-align:center; color:#818cf8; font-weight:600;">{rd['today_calls']}</td>
             <td style="padding:10px 8px; text-align:center; color:#c084fc; font-weight:600;">{rd['today_emails']}</td>
             <td style="padding:10px 8px; text-align:center; color:#fbbf24; font-weight:600;">{rd['today_tasks']}</td>
+            <td style="padding:10px 8px; text-align:center; color:#34d399; font-weight:600;">{rd['today_tickets']}</td>
+            <td style="padding:10px 8px; text-align:center; color:#fb923c; font-weight:600;">{rd['today_notes']}</td>
             <td style="padding:10px 8px; text-align:center; color:{total_color}; font-weight:700; font-size:16px;">{rd['today_total']}</td>
         </tr>"""
 
@@ -439,6 +459,8 @@ def build_manager_email_html(team_summary: str, all_rep_data: dict[str, dict], t
             <th style="padding:10px 8px; text-align:center; color:#818cf8; font-size:11px; text-transform:uppercase;">Calls</th>
             <th style="padding:10px 8px; text-align:center; color:#c084fc; font-size:11px; text-transform:uppercase;">Emails</th>
             <th style="padding:10px 8px; text-align:center; color:#fbbf24; font-size:11px; text-transform:uppercase;">Tasks</th>
+            <th style="padding:10px 8px; text-align:center; color:#34d399; font-size:11px; text-transform:uppercase;">Tickets</th>
+            <th style="padding:10px 8px; text-align:center; color:#fb923c; font-size:11px; text-transform:uppercase;">Notes</th>
             <th style="padding:10px 8px; text-align:center; color:#6a6283; font-size:11px; text-transform:uppercase;">Total</th>
         </tr>
         {rep_rows}
