@@ -2,9 +2,11 @@ name: Daily Activity Report (5 PM MST)
 
 on:
   schedule:
-    # 5:00 PM MST = 00:00 UTC next day (MST is UTC-7)
-    # During MDT (Mar-Nov), 5 PM MDT = 23:00 UTC same day
-    - cron: "0 0 * * 1-5"   # Midnight UTC = 5 PM MST, weekdays only
+    # 5 PM Mountain Time year-round (both entries cover DST transitions):
+    #   23:00 UTC = 5 PM MDT (Mar–Nov)  — runs Mon-Fri MDT
+    #   00:00 UTC = 5 PM MST (Nov–Mar)  — runs Tue-Sat UTC = Mon-Fri MST
+    - cron: "0 23 * * 1-5"
+    - cron: "0 0 * * 2-6"
   workflow_dispatch:
     inputs:
       test_rep:
@@ -43,7 +45,6 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           SMTP_FROM: ${{ secrets.SMTP_FROM }}
-          TEST_EMAIL_OVERRIDE: ${{ secrets.TEST_EMAIL_OVERRIDE }}
           GONG_ACCESS_KEY: ${{ secrets.GONG_ACCESS_KEY }}
           GONG_SECRET_KEY: ${{ secrets.GONG_SECRET_KEY }}
           GONG_BASE_URL: ${{ secrets.GONG_BASE_URL }}
