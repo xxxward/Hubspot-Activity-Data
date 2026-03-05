@@ -627,8 +627,18 @@ def main():
 
     setup_logging()
 
-    # Today in MST
+    # Today in Mountain Time (MST/MDT depending on DST)
     now_mst = datetime.now(MST)
+
+    # Guard against double-send: two cron entries cover DST, so skip if
+    # Mountain Time hour is outside the 4-6 PM window (target is 5 PM).
+    if args.test is None and not (16 <= now_mst.hour <= 18):
+        logger.info(
+            "Current Mountain Time is %s — outside 4-6 PM window, skipping.",
+            now_mst.strftime("%I:%M %p %Z"),
+        )
+        return
+
     today = now_mst.date()
     today_ts = pd.Timestamp(today)
     today_str = today.strftime("%A, %B %d, %Y")
