@@ -3,17 +3,20 @@ Pipeline Intelligence — Deal Confidence Engine
 
 Binary output: deals you CAN count on vs deals you CANNOT count on.
 
-Priority order for evidence:
-  1. Gong call transcripts / AI summaries (PRIMARY — must be near-certain)
-  2. HubSpot activity data (SECONDARY — supports or contradicts)
+Evidence priority:
+  1. Gong call transcripts / AI summaries (PRIMARY signal)
+  2. HubSpot activity data (emails, meetings, notes, tasks — SECONDARY signal)
 
-A deal only goes in the "Count On" column if Gong evidence shows 99%+
-confidence the buyer is committed. Everything else is "Can't Count On."
+Both sources feed into the AI analysis. Gong carries more weight because
+it's what the buyer actually said, but HubSpot activity (meeting frequency,
+email recency, deal stage progression) matters too.
 """
 
 import json
+import re
 import time
 from datetime import date, datetime, timedelta
+from difflib import SequenceMatcher
 from zoneinfo import ZoneInfo
 
 import anthropic
@@ -56,7 +59,7 @@ deals = data["deals"]
 st.title("Pipeline Intelligence")
 st.caption(
     "Which deals can you actually count on this quarter? "
-    "Gong transcripts are the truth — HubSpot data is secondary."
+    "Gong transcripts + HubSpot activity analyzed together."
 )
 
 # ─── Sidebar controls ───────────────────────────────────────────────
@@ -72,6 +75,13 @@ with st.sidebar:
     else:
         q_end = date(today.year, q_start_month + 3, 1) - timedelta(days=1)
 
+    close_status_filter = st.multiselect(
+        "Close Status",
+        options=["Expect", "Best Case", "Opportunity"],
+        default=["Expect"],
+        help="Filter deals by HubSpot close status. Start with Expect for the tightest view.",
+    )
+
     selected_reps = st.multiselect(
         "Reps",
         options=REPS_IN_SCOPE,
@@ -81,11 +91,18 @@ with st.sidebar:
     st.divider()
     st.header("AI Model")
     MODEL_OPTIONS = {
-        "Haiku (fastest, cheapest)": "claude-haiku-4-5-20251001",
-        "Sonnet (balanced)": "claude-sonnet-4-20250514",
+        "Sonnet (recommended)": "claude-sonnet-4-20250514",
+        "Haiku (faster, less accurate)": "claude-haiku-4-5-20251001",
     }
     model_label = st.selectbox("Model", list(MODEL_OPTIONS.keys()), index=0)
     selected_model = MODEL_OPTIONS[model_label]
+
+    confidence_threshold = st.slider(
+        "Confidence threshold (%)",
+        min_value=50, max_value=99, value=75,
+        help="Minimum AI confidence to classify a deal as 'Count On'. "
+             "75% is recommended — high enough to be meaningful, low enough to surface real deals.",
+    )
 
     gong_lookback = st.slider(
         "Gong lookback (days)",
@@ -95,9 +112,54 @@ with st.sidebar:
 
     st.divider()
     gong_ok = is_gong_configured()
-    st.caption(f"Gong API: {'✅ Connected' if gong_ok else '❌ Not configured'}")
+    st.caption(f"Gong API: {'✅ Connected' if gong_ok else '⚠️ Not configured (HubSpot-only mode)'}")
     st.caption(f"Quarter: {q_start.strftime('%b %d')} – {q_end.strftime('%b %d, %Y')}")
     st.caption(f"Days remaining: {(q_end - today).days}")
+
+
+# ─── Fuzzy company matching ─────────────────────────────────────────
+
+def _normalize_company(name: str) -> str:
+    """Normalize company name for matching: lowercase, strip suffixes, punctuation."""
+    name = str(name).strip().lower()
+    # Remove common suffixes
+    for suffix in (" llc", " inc", " inc.", " corp", " corp.", " co.", " co",
+                   " ltd", " ltd.", " limited", " company", " group"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)].strip()
+    # Remove punctuation
+    name = re.sub(r"[^a-z0-9\s]", "", name)
+    # Collapse whitespace
+    name = re.sub(r"\s+", " ", name).strip()
+    return name
+
+
+def _fuzzy_match_company(deal_co: str, gong_companies: pd.Series, threshold: float = 0.65) -> pd.Series:
+    """
+    Return a boolean mask of Gong rows that match the deal company name.
+    Uses exact-normalized match first, then falls back to fuzzy matching.
+    """
+    norm_deal = _normalize_company(deal_co)
+    if not norm_deal:
+        return pd.Series(False, index=gong_companies.index)
+
+    norm_gong = gong_companies.apply(_normalize_company)
+
+    # Exact normalized match
+    exact_mask = norm_gong == norm_deal
+
+    # Contains match (either direction)
+    contains_mask = norm_gong.apply(
+        lambda g: norm_deal in g or g in norm_deal if g else False
+    )
+
+    # Fuzzy match for remaining
+    fuzzy_mask = norm_gong.apply(
+        lambda g: SequenceMatcher(None, norm_deal, g).ratio() >= threshold if g else False
+    )
+
+    return exact_mask | contains_mask | fuzzy_mask
+
 
 # ─── Filter deals ───────────────────────────────────────────────────
 
@@ -105,7 +167,6 @@ if deals.empty:
     st.warning("No deal data loaded. Check Google Sheets connection.")
     st.stop()
 
-# All active deals closing this quarter (any close status — we judge them ourselves)
 mask = pd.Series(True, index=deals.index)
 
 if "is_terminal" in deals.columns:
@@ -115,6 +176,9 @@ if "close_date" in deals.columns:
     cd = pd.to_datetime(deals["close_date"], errors="coerce")
     mask &= cd.notna() & (cd.dt.date >= q_start) & (cd.dt.date <= q_end)
 
+if "close_status" in deals.columns and close_status_filter:
+    mask &= deals["close_status"].isin(close_status_filter)
+
 if "hubspot_owner_name" in deals.columns and selected_reps:
     mask &= deals["hubspot_owner_name"].isin(selected_reps)
 
@@ -122,8 +186,8 @@ forecast_deals = deals[mask].copy()
 
 if forecast_deals.empty:
     st.info(
-        f"No active deals with close dates between {q_start} and {q_end}. "
-        "Adjust filters in the sidebar."
+        f"No active {', '.join(close_status_filter)} deals with close dates "
+        f"between {q_start} and {q_end}. Adjust filters in the sidebar."
     )
     st.stop()
 
@@ -136,10 +200,24 @@ total_val = forecast_deals["amount"].sum() if "amount" in forecast_deals.columns
 n_deals = len(forecast_deals)
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Deals This Quarter", f"{n_deals}")
+col1.metric("Deals in Scope", f"{n_deals}")
 col2.metric("Total Pipeline", f"${total_val:,.0f}")
 col3.metric("Quarter Ends", q_end.strftime("%B %d"))
 col4.metric("Days Remaining", f"{(q_end - today).days}")
+
+# Show the deal table
+st.divider()
+display_cols = [c for c in (
+    "deal_name", "company_name", "hubspot_owner_name", "amount",
+    "deal_stage", "close_status", "close_date", "pipeline",
+) if c in forecast_deals.columns]
+
+with st.expander(f"View all {n_deals} deals in scope", expanded=False):
+    st.dataframe(
+        forecast_deals[display_cols].reset_index(drop=True),
+        use_container_width=True,
+        hide_index=True,
+    )
 
 st.divider()
 
@@ -194,7 +272,6 @@ def _get_deal_activity_context(deal_row, all_data, since_date=None):
 
             summary = str(row.get(summary_col, ""))[:300]
             if activity_type == "Note":
-                import re
                 summary = re.sub(r'<[^>]+>', '', summary)
 
             activities.append({
@@ -211,36 +288,39 @@ def _get_deal_activity_context(deal_row, all_data, since_date=None):
 # ─── Run the intelligence engine ───────────────────────────────────
 
 if st.button("Run Deal Intelligence", type="primary"):
-    if not gong_ok:
-        st.error(
-            "⚠️ Gong API not configured. This engine REQUIRES Gong call data to make "
-            "confidence assessments. Without transcripts, no deal can be marked as 'Count On.' "
-            "Add GONG_ACCESS_KEY and GONG_SECRET_KEY to proceed."
-        )
-        st.stop()
 
-    # Step 1: Fetch Gong calls
+    # Step 1: Fetch Gong calls (if configured)
     gong_calls_df = pd.DataFrame()
-    with st.status("Step 1/3 — Fetching Gong call transcripts...", expanded=True) as status:
-        from_dt = datetime(today.year, today.month, today.day, tzinfo=MST) - timedelta(days=gong_lookback)
-        to_dt = datetime(today.year, today.month, today.day, 23, 59, 59, tzinfo=MST)
+    if gong_ok:
+        with st.status("Step 1/3 — Fetching Gong call transcripts...", expanded=True) as status:
+            from_dt = datetime(today.year, today.month, today.day, tzinfo=MST) - timedelta(days=gong_lookback)
+            to_dt = datetime(today.year, today.month, today.day, 23, 59, 59, tzinfo=MST)
 
-        gong_calls_df = fetch_gong_enrichment_range(
-            from_dt, to_dt, include_transcripts=True,
+            gong_calls_df = fetch_gong_enrichment_range(
+                from_dt, to_dt, include_transcripts=True,
+            )
+            if not gong_calls_df.empty:
+                gong_calls_df["hubspot_owner_name"] = gong_calls_df["gong_user_name"].apply(map_gong_to_rep)
+                st.write(f"**{len(gong_calls_df)}** Gong calls found in the last {gong_lookback} days.")
+
+                # Show unique companies in Gong for debugging
+                gong_companies = gong_calls_df["company_name"].dropna().unique()
+                st.write(f"Gong calls span **{len(gong_companies)}** unique companies.")
+            else:
+                st.write("No Gong calls found for this period.")
+            status.update(label="Step 1/3 — Gong transcripts fetched", state="complete")
+    else:
+        st.info(
+            "Gong API not configured — analyzing with HubSpot data only. "
+            "Add GONG_ACCESS_KEY and GONG_SECRET_KEY for transcript-based analysis."
         )
-        if not gong_calls_df.empty:
-            gong_calls_df["hubspot_owner_name"] = gong_calls_df["gong_user_name"].apply(map_gong_to_rep)
-            st.write(f"**{len(gong_calls_df)}** Gong calls found in the last {gong_lookback} days.")
-        else:
-            st.write("No Gong calls found for this period.")
-        status.update(label="Step 1/3 — Gong transcripts fetched", state="complete")
 
     # Step 2: Match calls to deals and build context
-    with st.status("Step 2/3 — Matching calls to deals...", expanded=True) as status:
+    with st.status("Step 2/3 — Building deal context (Gong + HubSpot)...", expanded=True) as status:
         deal_contexts = []
 
         for _, deal in forecast_deals.iterrows():
-            deal_co = str(deal.get("company_name", "")).strip().lower()
+            deal_co = str(deal.get("company_name", "")).strip()
             deal_name = str(deal.get("deal_name", ""))
             rep = str(deal.get("hubspot_owner_name", ""))
             amount = deal.get("amount", 0)
@@ -248,11 +328,11 @@ if st.button("Run Deal Intelligence", type="primary"):
             close_dt = deal.get("close_date", "")
             close_status = str(deal.get("close_status", ""))
 
-            # Find Gong calls for this company
+            # Find Gong calls — fuzzy match on company name
             matched_calls = []
             if not gong_calls_df.empty and deal_co:
-                gong_co = gong_calls_df["company_name"].astype(str).str.strip().str.lower()
-                call_mask = gong_co == deal_co
+                gong_co_series = gong_calls_df["company_name"].astype(str)
+                call_mask = _fuzzy_match_company(deal_co, gong_co_series)
                 matched = gong_calls_df[call_mask].copy()
                 if not matched.empty:
                     matched["_dt"] = pd.to_datetime(matched["call_start"], errors="coerce")
@@ -266,6 +346,7 @@ if st.button("Run Deal Intelligence", type="primary"):
                             "duration_min": round((call_row.get("call_duration_seconds", 0) or 0) / 60, 1),
                             "topics": call_row.get("topics", ""),
                             "transcript": transcript[:8000] if transcript else "",
+                            "gong_company": call_row.get("company_name", ""),
                         })
 
             # HubSpot activity (last 90 days)
@@ -274,7 +355,7 @@ if st.button("Run Deal Intelligence", type="primary"):
 
             deal_contexts.append({
                 "deal_name": deal_name,
-                "company": str(deal.get("company_name", "")),
+                "company": deal_co,
                 "rep": rep,
                 "amount": float(amount) if pd.notna(amount) else 0,
                 "stage": stage,
@@ -286,61 +367,50 @@ if st.button("Run Deal Intelligence", type="primary"):
             })
 
         n_with_gong = sum(1 for d in deal_contexts if d["gong_calls"])
-        n_without = len(deal_contexts) - n_with_gong
+        n_with_hs = sum(1 for d in deal_contexts if d["hubspot_activity"])
+        n_neither = sum(1 for d in deal_contexts if not d["gong_calls"] and not d["hubspot_activity"])
         st.write(
-            f"**{n_with_gong}** deals matched to Gong calls. "
-            f"**{n_without}** deals have NO Gong data (auto-classified as Can't Count On)."
+            f"**{n_with_gong}** deals matched to Gong calls (fuzzy match). "
+            f"**{n_with_hs}** deals have HubSpot activity. "
+            f"**{n_neither}** deals have no data at all."
         )
         status.update(label="Step 2/3 — Context built", state="complete")
 
-    # Step 3: AI analysis — binary classification
+    # Step 3: AI analysis — ALL deals get analyzed
     with st.status("Step 3/3 — AI confidence analysis...", expanded=True) as status:
         client = anthropic.Anthropic()
         all_results = []
-
-        # Deals WITHOUT Gong calls → automatic "Can't Count On"
-        no_gong_deals = [d for d in deal_contexts if not d["gong_calls"]]
-        for ctx in no_gong_deals:
-            all_results.append({
-                "deal_name": ctx["deal_name"],
-                "company": ctx["company"],
-                "rep": ctx["rep"],
-                "amount": ctx["amount"],
-                "verdict": "CANT_COUNT_ON",
-                "confidence": 0.0,
-                "reason": "No Gong call data available. Cannot verify buyer commitment without conversation evidence.",
-                "key_quote": None,
-                "risk_factors": ["No recorded calls with this prospect in the lookback period"],
-                "next_step": "Get on a call with this prospect ASAP and confirm timeline, budget, and decision process.",
-                "gong_calls_found": 0,
-                "last_contact": "",
-            })
-
-        # Deals WITH Gong calls → AI analysis
-        gong_deals = [d for d in deal_contexts if d["gong_calls"]]
         BATCH = 3
-        progress = st.progress(0, text="Analyzing deals with Gong data...")
+        total_deals = len(deal_contexts)
+        progress = st.progress(0, text="Analyzing deals...")
 
-        for i in range(0, len(gong_deals), BATCH):
-            batch = gong_deals[i : i + BATCH]
+        for i in range(0, total_deals, BATCH):
+            batch = deal_contexts[i : i + BATCH]
 
             deals_block = ""
             for ctx in batch:
-                gong_section = "GONG CALL TRANSCRIPTS (most recent first):\n"
-                for c in ctx["gong_calls"]:
-                    gong_section += f"""
+                # Build Gong section
+                if ctx["gong_calls"]:
+                    gong_section = f"GONG CALL TRANSCRIPTS ({len(ctx['gong_calls'])} calls, most recent first):\n"
+                    for c in ctx["gong_calls"]:
+                        gong_section += f"""
   Call: {c['call_title']} ({c['call_date']}, {c['duration_min']} min, rep: {c['rep']})
+  Gong Company: {c.get('gong_company', '')}
   Topics: {c['topics']}
   Transcript:
   {c['transcript']}
   ---
 """
+                else:
+                    gong_section = "NO GONG CALLS FOUND for this company.\n"
 
-                hs_section = ""
+                # Build HubSpot section
                 if ctx["hubspot_activity"]:
-                    hs_section = "HUBSPOT ACTIVITY (secondary context, last 90 days):\n"
+                    hs_section = f"HUBSPOT ACTIVITY ({len(ctx['hubspot_activity'])} items, last 90 days, most recent first):\n"
                     for a in ctx["hubspot_activity"][:15]:
                         hs_section += f"  [{a['type']}] {a['date']} | {a['owner']} | {a['summary']}\n"
+                else:
+                    hs_section = "NO HUBSPOT ACTIVITY found in the last 90 days.\n"
 
                 deals_block += f"""
 ============================
@@ -359,35 +429,37 @@ PIPELINE: {ctx['pipeline']}
 
 """
 
-            prompt = f"""You are a ruthlessly honest deal analyst for Calyx Containers (cannabis packaging). Today is {today.strftime('%B %d, %Y')}. The quarter ends {q_end.strftime('%B %d, %Y')} ({(q_end - today).days} days remaining).
+            prompt = f"""You are a deal analyst for Calyx Containers, a cannabis packaging company. Today is {today.strftime('%B %d, %Y')}. The quarter ends {q_end.strftime('%B %d, %Y')} ({(q_end - today).days} days remaining).
 
-Your job: decide if each deal is one the company can TRULY COUNT ON closing this quarter, or NOT.
+Your job: decide if each deal will ACTUALLY close this quarter based on the evidence.
 
-THE STANDARD IS EXTREMELY HIGH. A deal is "COUNT ON" ONLY if:
-- The Gong call transcript contains CLEAR, EXPLICIT buyer commitment language
-- Examples: confirmed PO timeline, verbal agreement on pricing, stated decision date, "we're moving forward", approved budget, signed LOI
-- The buyer (not the rep) said these things
-- There is recent activity (within last 2-3 weeks) showing continued momentum
-- There are NO contradicting signals (ghosting, competitor mentions, budget concerns, pushed timelines)
+EVIDENCE HIERARCHY:
+1. GONG TRANSCRIPTS (primary) — what the buyer actually said on calls. This is the strongest signal.
+   Look for: verbal commitments, agreed timelines, approved budgets, PO discussions, "we're moving forward", pricing agreements
+   Red flags: "we need to think about it", "checking with my team", competitor mentions, budget concerns, silence
 
-A deal is "CAN'T COUNT ON" if ANY of these are true:
-- No clear buyer commitment language in transcripts
-- Last meaningful contact was more than 3 weeks ago
-- Buyer expressed hesitation, budget concerns, or competitor evaluation
-- Only the rep is expressing confidence — the buyer hasn't confirmed
-- The deal stage or activity doesn't support the close date
-- Vague language like "we're interested" or "let's circle back" — that's not commitment
+2. HUBSPOT ACTIVITY (secondary) — emails, meetings, notes, tasks. Shows engagement momentum.
+   Strong signals: recent meetings (last 2 weeks), email exchanges about contracts/pricing/onboarding, multiple touchpoints
+   Weak signals: only outbound emails from rep with no response, stale activity (nothing in 3+ weeks), only automated tasks
 
-HubSpot data is SECONDARY. It can support or contradict Gong evidence but cannot alone make a deal "COUNT ON."
-If HubSpot shows activity AFTER the last Gong call that changes the picture, note it.
+CLASSIFICATION:
+- "COUNT_ON": Strong evidence the deal will close. Gong transcripts show buyer commitment OR HubSpot shows active deal progression with concrete next steps. You need to be genuinely confident.
+- "CANT_COUNT_ON": Evidence is weak, mixed, or missing. Don't guess — if you're not confident, say so.
+
+IMPORTANT:
+- Be honest but not impossibly strict. If a buyer verbally agreed to pricing and there's a follow-up meeting scheduled, that's COUNT_ON.
+- If there's strong HubSpot activity but no Gong calls, you CAN still mark it COUNT_ON if the activity clearly shows deal progression (e.g., contract sent, pricing confirmed via email, onboarding scheduled).
+- If there's literally no data (no Gong calls AND no HubSpot activity), it's CANT_COUNT_ON.
+- Your confidence score should reflect how sure you are. 0.9 = very likely. 0.7 = probable. 0.5 = coin flip.
 
 For each deal return JSON:
 {{
   "deal_name": "...",
   "verdict": "COUNT_ON" or "CANT_COUNT_ON",
-  "confidence": 0.0 to 1.0 (your confidence in THIS VERDICT),
-  "reason": "2-3 sentences. Be specific. Quote what the buyer actually said.",
-  "key_quote": "The single most important thing the buyer said (exact quote from transcript), or null if nothing definitive",
+  "confidence": 0.0 to 1.0,
+  "evidence_source": "gong" or "hubspot" or "both" or "none",
+  "reason": "2-3 sentences. Be specific. Reference actual evidence — quote buyer language from transcripts or cite specific HubSpot activity dates.",
+  "key_quote": "Exact buyer quote from Gong transcript if available, or most telling HubSpot activity detail. null if nothing substantive.",
   "risk_factors": ["list of specific concerns"],
   "next_step": "One specific action the rep should take this week"
 }}
@@ -420,13 +492,15 @@ Return a JSON array. No preamble, no markdown fences."""
                         br["rep"] = ctx_match["rep"]
                         br["amount"] = ctx_match["amount"]
                         br["gong_calls_found"] = len(ctx_match["gong_calls"])
+                        br["hs_activity_count"] = len(ctx_match["hubspot_activity"])
 
-                    # ENFORCE: only COUNT_ON if confidence >= 0.99
-                    if br.get("verdict") == "COUNT_ON" and br.get("confidence", 0) < 0.99:
+                    # Enforce confidence threshold
+                    conf = br.get("confidence", 0)
+                    if br.get("verdict") == "COUNT_ON" and conf < (confidence_threshold / 100):
                         br["verdict"] = "CANT_COUNT_ON"
                         br["reason"] = (
-                            f"Downgraded: AI confidence was {br.get('confidence', 0):.0%}, "
-                            f"below the 99% threshold. Original assessment: {br.get('reason', '')}"
+                            f"Below {confidence_threshold}% threshold (AI confidence: {conf:.0%}). "
+                            f"{br.get('reason', '')}"
                         )
 
                 all_results.extend(batch_results)
@@ -440,19 +514,20 @@ Return a JSON array. No preamble, no markdown fences."""
                         "amount": ctx["amount"],
                         "verdict": "CANT_COUNT_ON",
                         "confidence": 0,
+                        "evidence_source": "none",
                         "reason": f"Analysis failed: {e}",
                         "key_quote": None,
                         "risk_factors": ["Analysis error — manual review needed"],
                         "next_step": "Manual review needed",
-                        "gong_calls_found": 0,
+                        "gong_calls_found": len(ctx["gong_calls"]),
+                        "hs_activity_count": len(ctx["hubspot_activity"]),
                     })
 
-            if gong_deals:
-                progress.progress(
-                    min((i + BATCH) / len(gong_deals), 1.0),
-                    text=f"Analyzed {min(i + BATCH, len(gong_deals))}/{len(gong_deals)} deals...",
-                )
-            time.sleep(2)
+            progress.progress(
+                min((i + BATCH) / total_deals, 1.0),
+                text=f"Analyzed {min(i + BATCH, total_deals)}/{total_deals} deals...",
+            )
+            time.sleep(1)
 
         progress.empty()
         status.update(label="Step 3/3 — Analysis complete", state="complete")
@@ -469,8 +544,6 @@ Return a JSON array. No preamble, no markdown fences."""
 
     # ─── Top-level verdict ────────────────────────────────────────────
 
-    st.markdown("---")
-
     c1, c2, c3 = st.columns([2, 1, 2])
     with c1:
         st.markdown(
@@ -485,31 +558,38 @@ Return a JSON array. No preamble, no markdown fences."""
             f"### ${cant_count_on_val:,.0f}"
         )
 
+    st.caption(f"Confidence threshold: {confidence_threshold}% | Model: {model_label}")
+
     st.markdown("---")
 
     # ─── COUNT ON section ─────────────────────────────────────────────
 
     st.subheader("✅ Deals You Can Count On")
-    st.caption("99%+ confidence based on Gong call evidence. The buyer has committed.")
+    st.caption(
+        f"AI confidence >= {confidence_threshold}% based on Gong transcripts and/or HubSpot activity."
+    )
 
     if not count_on:
         st.info(
-            "No deals meet the 99% confidence threshold based on Gong transcript evidence. "
-            "This is honest — better to know now than miss forecast."
+            f"No deals met the {confidence_threshold}% confidence threshold. "
+            "Try lowering the threshold in the sidebar, or review the 'Can't Count On' deals for ones that are close."
         )
     else:
         for r in sorted(count_on, key=lambda x: x.get("amount", 0), reverse=True):
+            evidence_tag = r.get("evidence_source", "").upper()
+            confidence_pct = r.get("confidence", 0)
             with st.expander(
                 f"✅ **{r['deal_name']}** — {r.get('company', '')} — "
-                f"${r.get('amount', 0):,.0f} — {r.get('rep', '')}",
+                f"${r.get('amount', 0):,.0f} — {r.get('rep', '')} "
+                f"({confidence_pct:.0%} | {evidence_tag})",
                 expanded=True,
             ):
-                st.markdown(f"**Confidence:** {r.get('confidence', 0):.0%}")
+                st.markdown(f"**Confidence:** {confidence_pct:.0%} | **Evidence:** {evidence_tag}")
                 st.markdown(f"**Why this counts:** {r.get('reason', '')}")
 
                 quote = r.get("key_quote")
                 if quote:
-                    st.success(f"**Buyer said:** \"{quote}\"")
+                    st.success(f"**Key evidence:** \"{quote}\"")
 
                 next_step = r.get("next_step", "")
                 if next_step:
@@ -526,50 +606,40 @@ Return a JSON array. No preamble, no markdown fences."""
     # ─── CAN'T COUNT ON section ───────────────────────────────────────
 
     st.subheader("❌ Deals You Can't Count On")
-    st.caption(
-        "These may still close, but the evidence isn't there yet. "
-        "Don't build your forecast around them."
-    )
+    st.caption("Insufficient evidence to forecast with confidence. May still close — just can't bank on it.")
 
-    # Sub-group: has Gong data but didn't pass the bar
-    has_gong_but_failed = [r for r in cant_count_on if r.get("gong_calls_found", 0) > 0]
-    no_gong = [r for r in cant_count_on if r.get("gong_calls_found", 0) == 0]
+    # Sort by amount descending so biggest at-risk deals show first
+    cant_count_on_sorted = sorted(cant_count_on, key=lambda x: x.get("amount", 0), reverse=True)
 
-    if has_gong_but_failed:
-        st.markdown("#### Calls recorded, but buyer hasn't committed")
-        for r in sorted(has_gong_but_failed, key=lambda x: x.get("amount", 0), reverse=True):
-            with st.expander(
-                f"⚠️ **{r['deal_name']}** — {r.get('company', '')} — "
-                f"${r.get('amount', 0):,.0f} — {r.get('rep', '')}",
-                expanded=False,
-            ):
-                st.markdown(f"**Confidence:** {r.get('confidence', 0):.0%}")
-                st.markdown(f"**Why it's not bankable:** {r.get('reason', '')}")
+    for r in cant_count_on_sorted:
+        evidence_tag = r.get("evidence_source", "none").upper()
+        confidence_pct = r.get("confidence", 0)
+        gong_count = r.get("gong_calls_found", 0)
+        hs_count = r.get("hs_activity_count", 0)
+        data_label = f"Gong: {gong_count} | HS: {hs_count}"
 
-                quote = r.get("key_quote")
-                if quote:
-                    st.warning(f"**Buyer said:** \"{quote}\"")
+        with st.expander(
+            f"❌ **{r['deal_name']}** — {r.get('company', '')} — "
+            f"${r.get('amount', 0):,.0f} — {r.get('rep', '')} "
+            f"({confidence_pct:.0%} | {data_label})",
+            expanded=False,
+        ):
+            st.markdown(f"**Confidence:** {confidence_pct:.0%} | **Evidence:** {evidence_tag} | **Data:** {data_label}")
+            st.markdown(f"**Why it's not bankable:** {r.get('reason', '')}")
 
-                risks = r.get("risk_factors", [])
-                if risks:
-                    st.markdown("**Risk factors:**")
-                    for risk in risks:
-                        st.error(risk)
+            quote = r.get("key_quote")
+            if quote:
+                st.warning(f"**Key signal:** \"{quote}\"")
 
-                next_step = r.get("next_step", "")
-                if next_step:
-                    st.markdown(f"**To convert this deal:** {next_step}")
+            risks = r.get("risk_factors", [])
+            if risks:
+                st.markdown("**Risk factors:**")
+                for risk in risks:
+                    st.error(risk)
 
-    if no_gong:
-        st.markdown("#### No Gong calls — flying blind")
-        for r in sorted(no_gong, key=lambda x: x.get("amount", 0), reverse=True):
-            with st.expander(
-                f"🔇 **{r['deal_name']}** — {r.get('company', '')} — "
-                f"${r.get('amount', 0):,.0f} — {r.get('rep', '')}",
-                expanded=False,
-            ):
-                st.error("No recorded Gong calls for this company. Can't verify buyer intent.")
-                st.markdown(f"**Action:** {r.get('next_step', 'Get on a call with this prospect.')}")
+            next_step = r.get("next_step", "")
+            if next_step:
+                st.markdown(f"**To convert this deal:** {next_step}")
 
     # ─── Download CSV ─────────────────────────────────────────────────
     st.divider()
@@ -582,11 +652,13 @@ Return a JSON array. No preamble, no markdown fences."""
             "Amount": r.get("amount", 0),
             "Verdict": "Count On" if r.get("verdict") == "COUNT_ON" else "Can't Count On",
             "Confidence": r.get("confidence", 0),
+            "Evidence Source": r.get("evidence_source", ""),
             "Reason": r.get("reason", ""),
-            "Key Buyer Quote": r.get("key_quote", ""),
+            "Key Quote": r.get("key_quote", ""),
             "Risk Factors": " | ".join(r.get("risk_factors", [])),
             "Next Step": r.get("next_step", ""),
             "Gong Calls Found": r.get("gong_calls_found", 0),
+            "HubSpot Activities": r.get("hs_activity_count", 0),
         })
     csv_out = pd.DataFrame(rows_out).to_csv(index=False)
     st.download_button(
