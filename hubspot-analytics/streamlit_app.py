@@ -509,7 +509,7 @@ NAV_SECTIONS = [
     ("tickets", "🎫", "Tickets"),
     ("gong",    "🎙", "Gong Intelligence"),
     ("deals",   "🏥", "Deal Health"),
-    ("forecast","🔮", "Pipeline Forecast"),
+    ("forecast","🎯", "Pipeline Intelligence"),
 ]
 
 # Count badges
@@ -4468,13 +4468,14 @@ CREATIVE RE-ENGAGEMENT IDEAS (when deals go quiet):
 elif st.session_state.page == "forecast":
 
     st.markdown("""<div class="page-header">
-        <h1>🔮 Pipeline Forecast</h1>
-        <p class="page-sub">End-of-quarter deal intelligence — Gong transcripts + HubSpot activity.</p>
+        <h1>🎯 Pipeline Intelligence</h1>
+        <p class="page-sub">Which deals can you actually count on? Gong transcripts are the truth.</p>
     </div>""", unsafe_allow_html=True)
 
     st.info(
-        "📌 **Full Pipeline Forecast** is available as a dedicated page with Gong transcript analysis and AI-powered deal predictions. "
-        "Use the **Pipeline Forecast** page in the sidebar navigation (Streamlit pages menu) for the complete experience."
+        "📌 **Full Pipeline Intelligence engine** is available as a dedicated page with Gong transcript analysis and AI-powered confidence scoring. "
+        "Use the **Pipeline Intelligence** page in the sidebar navigation for the complete experience — "
+        "it classifies every deal as Count On (99%+ confidence) or Can't Count On."
     )
 
     # Quick inline view: Expect deals closing this quarter
