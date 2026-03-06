@@ -631,10 +631,12 @@ def main():
     now_mst = datetime.now(MST)
 
     # Guard against double-send: two cron entries cover DST, so skip if
-    # Mountain Time hour is outside the 4-6 PM window (target is 5 PM).
-    if args.test is None and not (16 <= now_mst.hour <= 18):
+    # Mountain Time hour is outside the 4-8 PM window (target is 5 PM).
+    # Note: GitHub Actions cron can be delayed 1-3 hours, so the window
+    # must be wide enough to accommodate late runs.
+    if args.test is None and not (16 <= now_mst.hour <= 20):
         logger.info(
-            "Current Mountain Time is %s — outside 4-6 PM window, skipping.",
+            "Current Mountain Time is %s — outside 4-8 PM window, skipping.",
             now_mst.strftime("%I:%M %p %Z"),
         )
         return
