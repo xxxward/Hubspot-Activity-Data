@@ -23,10 +23,14 @@ from src.metrics.scoring import compute_activity_score, compute_activity_score_b
 logger = logging.getLogger(__name__)
 
 try:
-    from src.gong.gong_client import fetch_gong_enrichment, map_gong_to_rep, is_gong_configured
+    from src.gong.gong_client import (
+        fetch_gong_enrichment, fetch_gong_enrichment_range,
+        map_gong_to_rep, is_gong_configured,
+    )
 except ImportError:
     logger.warning("Gong client not available — skipping Gong integration.")
     def fetch_gong_enrichment(*a, **kw): return pd.DataFrame()
+    def fetch_gong_enrichment_range(*a, **kw): return pd.DataFrame()
     def map_gong_to_rep(name): return name
     def is_gong_configured(): return False
 
@@ -134,14 +138,18 @@ def load_all() -> AnalyticsData:
     tickets = norm.get("tickets", pd.DataFrame())
     new_pipeline = apply_activity_filters(norm.get("new_pipeline", pd.DataFrame()))
 
-    # 6b - Gong call intelligence (optional)
+    # 6b - Gong call intelligence (optional) — fetch last 7 days for dashboard
     gong_calls = pd.DataFrame()
     if is_gong_configured():
-        logger.info("Fetching Gong call data...")
+        logger.info("Fetching Gong call data (last 7 days)...")
         try:
-            from datetime import datetime
+            from datetime import datetime, timedelta
             from zoneinfo import ZoneInfo
-            gong_calls = fetch_gong_enrichment(datetime.now(ZoneInfo("America/Denver")))
+            _tz = ZoneInfo("America/Denver")
+            _now = datetime.now(_tz)
+            _from = (_now - timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
+            _to = _now.replace(hour=23, minute=59, second=59, microsecond=0)
+            gong_calls = fetch_gong_enrichment_range(_from, _to)
             if not gong_calls.empty:
                 gong_calls["hubspot_owner_name"] = gong_calls["gong_user_name"].apply(map_gong_to_rep)
                 logger.info("Gong: %d calls loaded.", len(gong_calls))

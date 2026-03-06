@@ -509,6 +509,7 @@ NAV_SECTIONS = [
     ("tickets", "🎫", "Tickets"),
     ("gong",    "🎙", "Gong Intelligence"),
     ("deals",   "🏥", "Deal Health"),
+    ("forecast","🔮", "Pipeline Forecast"),
 ]
 
 # Count badges
@@ -522,6 +523,7 @@ _counts = {
     "tickets": len(data.tickets) if not data.tickets.empty else 0,
     "gong": len(data.gong_calls) if not data.gong_calls.empty else 0,
     "deals": len(data.deals) if not data.deals.empty else 0,
+    "forecast": len(data.deals_closing_this_quarter) if not data.deals_closing_this_quarter.empty else 0,
 }
 
 if "page" not in st.session_state:
@@ -4458,3 +4460,79 @@ CREATIVE RE-ENGAGEMENT IDEAS (when deals go quiet):
                 unmatched_cos = unmatched[["company_name", "deal_name", "hubspot_owner_name"]].drop_duplicates() if all(c in unmatched.columns for c in ("company_name", "deal_name", "hubspot_owner_name")) else pd.DataFrame()
                 if not unmatched_cos.empty:
                     st.dataframe(unmatched_cos.head(30), use_container_width=True, hide_index=True)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# PAGE: 🔮 PIPELINE FORECAST
+# ════════════════════════════════════════════════════════════════════════
+elif st.session_state.page == "forecast":
+
+    st.markdown("""<div class="page-header">
+        <h1>🔮 Pipeline Forecast</h1>
+        <p class="page-sub">End-of-quarter deal intelligence — Gong transcripts + HubSpot activity.</p>
+    </div>""", unsafe_allow_html=True)
+
+    st.info(
+        "📌 **Full Pipeline Forecast** is available as a dedicated page with Gong transcript analysis and AI-powered deal predictions. "
+        "Use the **Pipeline Forecast** page in the sidebar navigation (Streamlit pages menu) for the complete experience."
+    )
+
+    # Quick inline view: Expect deals closing this quarter
+    _today = date.today()
+    _q_start_month = ((_today.month - 1) // 3) * 3 + 1
+    _q_start = date(_today.year, _q_start_month, 1)
+    if _q_start_month + 3 > 12:
+        _q_end = date(_today.year + 1, (_q_start_month + 3) - 12, 1) - timedelta(days=1)
+    else:
+        _q_end = date(_today.year, _q_start_month + 3, 1) - timedelta(days=1)
+
+    _fd = _frep(_fpipe(data.deals))
+    _active = _fd[~_fd["is_terminal"]].copy() if "is_terminal" in _fd.columns else _fd.copy()
+
+    # Filter to Expect deals closing this quarter
+    _mask = pd.Series(True, index=_active.index)
+    if "close_date" in _active.columns:
+        _cd = pd.to_datetime(_active["close_date"], errors="coerce")
+        _mask &= _cd.notna() & (_cd.dt.date >= _q_start) & (_cd.dt.date <= _q_end)
+    if "close_status" in _active.columns:
+        _mask &= _active["close_status"] == "Expect"
+
+    _expect_deals = _active[_mask].copy()
+
+    if _expect_deals.empty:
+        empty_state("No Expect deals with close dates this quarter.")
+    else:
+        if "amount" in _expect_deals.columns:
+            _expect_deals = _expect_deals.sort_values("amount", ascending=False)
+
+        _total = _expect_deals["amount"].sum() if "amount" in _expect_deals.columns else 0
+        kpi([
+            ("Expect Deals This Q", f"{len(_expect_deals)}", "violet"),
+            ("Total Value", f"${_total:,.0f}", "blue"),
+            ("Quarter Ends", _q_end.strftime("%b %d"), "amber"),
+            ("Days Left", f"{(_q_end - _today).days}", "red"),
+        ])
+
+        section_divider()
+        section_header("📋", "Expect Deals Closing This Quarter", C.get("violet", "#a78bfa"))
+
+        _show_cols = [c for c in (
+            "deal_name", "company_name", "hubspot_owner_name", "amount",
+            "deal_stage", "close_date", "pipeline",
+        ) if c in _expect_deals.columns]
+        st.dataframe(
+            _display_df(_expect_deals[_show_cols]),
+            use_container_width=True, hide_index=True,
+        )
+
+        # Show by rep
+        section_divider()
+        if "hubspot_owner_name" in _expect_deals.columns and "amount" in _expect_deals.columns:
+            section_header("👤", "Expect Pipeline by Rep", C.get("blue", "#818cf8"))
+            _rep_summary = _expect_deals.groupby("hubspot_owner_name").agg(
+                deals=("deal_name", "count"),
+                total_value=("amount", "sum"),
+            ).reset_index().sort_values("total_value", ascending=False)
+            _rep_summary.columns = ["Rep", "Deals", "Total Value"]
+            _rep_summary["Total Value"] = _rep_summary["Total Value"].apply(lambda x: f"${x:,.0f}")
+            st.dataframe(_rep_summary, use_container_width=True, hide_index=True)

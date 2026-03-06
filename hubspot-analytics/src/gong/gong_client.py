@@ -556,3 +556,110 @@ def map_gong_to_rep(gong_name: str) -> str:
     if gong_name in GONG_TO_REP_NAME:
         return GONG_TO_REP_NAME[gong_name]
     return gong_name
+
+
+# ─── Date-range enrichment (for dashboard Gong Intelligence page) ──
+
+def fetch_gong_enrichment_range(
+    from_dt: datetime,
+    to_dt: datetime,
+    include_transcripts: bool = False,
+) -> pd.DataFrame:
+    """
+    Like fetch_gong_enrichment() but for an arbitrary date range.
+    Returns the same columns plus optionally full transcript text.
+    """
+    try:
+        calls = fetch_calls(from_dt, to_dt)
+    except Exception as e:
+        logger.warning("Failed to fetch Gong calls for range: %s", e)
+        return pd.DataFrame()
+
+    if not calls:
+        return pd.DataFrame()
+
+    call_ids = [c["id"] for c in calls if "id" in c]
+
+    try:
+        extensive = fetch_calls_extensive(call_ids)
+    except Exception as e:
+        logger.warning("Failed to fetch extensive Gong data: %s", e)
+        extensive = []
+
+    transcripts: dict[str, list[dict]] = {}
+    if include_transcripts:
+        try:
+            transcripts = fetch_call_transcripts(call_ids)
+        except Exception as e:
+            logger.warning("Failed to fetch Gong transcripts: %s", e)
+
+    extensive_map = {}
+    for ec in extensive:
+        meta = ec.get("metaData", {})
+        cid = meta.get("id", "")
+        if cid:
+            extensive_map[cid] = ec
+
+    rows = []
+    for call in calls:
+        cid       = call.get("id", "")
+        title     = call.get("title", "")
+        started   = call.get("started", "")
+        duration  = call.get("duration", 0)
+        direction = call.get("direction", "")
+
+        parties   = call.get("parties", [])
+        user_name = ""
+        user_id   = ""
+        company   = ""
+        for p in parties:
+            if p.get("affiliation") == "Internal":
+                user_name = p.get("name", user_name)
+                user_id   = p.get("userId", user_id)
+            elif p.get("affiliation") == "External":
+                company = p.get("company", company) or p.get("name", "")
+
+        ext         = extensive_map.get(cid, {})
+        interaction = ext.get("interaction", {})
+        content     = ext.get("content", {})
+
+        talk_ratio  = None
+        person_stats = interaction.get("personInteractionStats", [])
+        for ps in person_stats:
+            if ps.get("userId") == user_id or ps.get("affiliation") == "Internal":
+                talk_ratio = ps.get("talkRatio")
+                break
+
+        questions      = interaction.get("questions", [])
+        question_count = len(questions)
+        topics   = [t.get("name", "") for t in content.get("topics",   []) if t.get("name")]
+        trackers = [t.get("name", "") for t in content.get("trackers", []) if t.get("name")]
+
+        transcript_preview = ""
+        transcript_full = ""
+        if cid in transcripts:
+            transcript_full = transcript_to_text(transcripts[cid])
+            transcript_preview = transcript_full[:500]
+
+        row = {
+            "gong_call_id":          cid,
+            "call_title":            title,
+            "call_start":            started,
+            "call_duration_seconds": duration,
+            "call_direction":        direction,
+            "gong_user_id":          user_id,
+            "gong_user_name":        user_name,
+            "company_name":          company,
+            "talk_ratio":            talk_ratio,
+            "question_count":        question_count,
+            "topics":                ", ".join(topics)   if topics   else "",
+            "trackers":              ", ".join(trackers) if trackers else "",
+            "transcript_preview":    transcript_preview,
+        }
+        if include_transcripts:
+            row["transcript_full"] = transcript_full
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    logger.info("Gong range enrichment: %d calls for %s to %s.", len(df), from_dt.date(), to_dt.date())
+    return df

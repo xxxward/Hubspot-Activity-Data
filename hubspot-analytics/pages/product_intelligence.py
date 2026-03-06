@@ -39,6 +39,27 @@ with st.sidebar:
     )
 
     st.divider()
+    st.header("Model & Cost")
+
+    MODEL_OPTIONS = {
+        "Haiku (fastest, cheapest)": "claude-haiku-4-5-20251001",
+        "Sonnet (balanced)": "claude-sonnet-4-20250514",
+    }
+    model_label = st.selectbox(
+        "Claude model",
+        options=list(MODEL_OPTIONS.keys()),
+        index=0,
+        help="Haiku is ~10x cheaper and much less likely to hit rate limits.",
+    )
+    selected_model = MODEL_OPTIONS[model_label]
+
+    max_transcript_chars = st.slider(
+        "Max transcript chars per call",
+        min_value=1000, max_value=20000, value=6000, step=1000,
+        help="Truncate long transcripts to reduce token usage and avoid rate limits.",
+    )
+
+    st.divider()
     st.header("Analysis Filters")
 
     product = st.selectbox(
@@ -110,12 +131,33 @@ else:
             )
 
 
+# ─── Retry helper for rate limits ────────────────────────────────────
+
+def _call_claude_with_retry(client, model, max_tokens, messages, max_retries=4):
+    """Call the Anthropic API with exponential backoff on 429 rate-limit errors."""
+    for attempt in range(max_retries + 1):
+        try:
+            return client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                messages=messages,
+            )
+        except anthropic.RateLimitError:
+            if attempt == max_retries:
+                raise
+            wait = 2 ** (attempt + 1)  # 2, 4, 8, 16 seconds
+            st.toast(f"Rate limited — waiting {wait}s before retry {attempt + 2}/{max_retries + 1}...")
+            time.sleep(wait)
+
+
 # ─── Claude analysis function ────────────────────────────────────────
 
 def _run_claude_pricing_analysis(
     payload: list[dict],
     product: str,
     outcome: str,
+    model: str = "claude-haiku-4-5-20251001",
+    max_transcript_chars: int = 6000,
 ) -> dict:
     """
     Send transcript batches to Claude and extract structured pricing intelligence.
@@ -129,18 +171,21 @@ def _run_claude_pricing_analysis(
     """
     client = anthropic.Anthropic()
 
-    # Process in batches of 10 calls to stay within token limits
-    CLAUDE_BATCH = 10
+    # Smaller batches = fewer tokens per request = less likely to hit rate limits
+    CLAUDE_BATCH = 3
     all_findings: list[dict] = []
     progress = st.progress(0, text="Analyzing transcripts...")
 
     for i in range(0, len(payload), CLAUDE_BATCH):
         batch = payload[i : i + CLAUDE_BATCH]
 
-        # Build the transcript block for this batch
+        # Build the transcript block for this batch, truncating long transcripts
         transcript_block = ""
         for call in batch:
             won_label = {"Yes": "WON", "No": "LOST"}.get(call["won"], "UNKNOWN")
+            transcript_text = call["transcript_text"][:max_transcript_chars]
+            if len(call["transcript_text"]) > max_transcript_chars:
+                transcript_text += "\n[... transcript truncated ...]"
             transcript_block += f"""
 ---
 CALL ID: {call['call_id']}
@@ -153,7 +198,7 @@ PRICING MENTIONS: {call['pricing_mentions']}
 CALL LINK: {call['call_link']}
 
 TRANSCRIPT:
-{call['transcript_text']}
+{transcript_text}
 ---
 """
         prompt = f"""You are analyzing sales call transcripts for Calyx Containers, a cannabis packaging company selling {product}.
@@ -193,10 +238,9 @@ Here are the {len(batch)} call transcripts:
 Return ONLY the JSON array. No preamble, no markdown fences."""
 
         try:
-            response = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=4000,
-                messages=[{"role": "user", "content": prompt}],
+            response = _call_claude_with_retry(
+                client, model, 4000,
+                [{"role": "user", "content": prompt}],
             )
             raw = response.content[0].text.strip()
             # Strip markdown fences if Claude added them anyway
@@ -214,7 +258,7 @@ Return ONLY the JSON array. No preamble, no markdown fences."""
             min((i + CLAUDE_BATCH) / len(payload), 1.0),
             text=f"Analyzed {min(i + CLAUDE_BATCH, len(payload))}/{len(payload)} calls..."
         )
-        time.sleep(0.5)  # avoid rate limits
+        time.sleep(2)  # pace requests to avoid rate limits
 
     progress.empty()
 
@@ -235,10 +279,9 @@ Write a concise executive summary of the PRICING INTELLIGENCE. Focus on:
 Format as structured plain text with clear section headers. Be specific with numbers. This is for a VP of Sales."""
 
     try:
-        summary_response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1500,
-            messages=[{"role": "user", "content": synthesis_prompt}],
+        summary_response = _call_claude_with_retry(
+            client, model, 1500,
+            [{"role": "user", "content": synthesis_prompt}],
         )
         summary_text = summary_response.content[0].text
     except Exception as e:
@@ -399,7 +442,11 @@ if df is not None:
         with st.status("Step 3/3 — Analyzing pricing intelligence with Claude...", expanded=True) as status:
             payload = gc.build_analysis_payload(call_df, transcripts, product)
             st.write(f"Analyzing **{len(payload)}** calls with transcripts...")
-            results = _run_claude_pricing_analysis(payload, product, outcome)
+            results = _run_claude_pricing_analysis(
+                payload, product, outcome,
+                model=selected_model,
+                max_transcript_chars=max_transcript_chars,
+            )
             status.update(label="Step 3/3 — Analysis complete", state="complete")
 
         # ── Display results ──────────────────────────────────────────
