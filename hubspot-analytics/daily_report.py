@@ -70,6 +70,73 @@ ROLE_LABELS: dict[str, str] = {
 # DATA LOADING (reuse full pipeline, no Streamlit)
 # ═══════════════════════════════════════════════════════════════════════
 
+# Map rep emails to HubSpot rep names for Gong matching
+_EMAIL_TO_REP: dict[str, str] = {
+    "jlynch@calyxcontainers.com": "Jake Lynch",
+    "olabombard@calyxcontainers.com": "Owen Labombard",
+    "lmitton@calyxcontainers.com": "Lance Mitton",
+    "dborkowski@calyxcontainers.com": "Dave Borkowski",
+    "bsherman@calyxcontainers.com": "Brad Sherman",
+    "xward@calyxcontainers.com": "Alex Gonzalez",
+}
+
+
+def _supplement_meetings_from_gong(meetings: pd.DataFrame, gong_summaries: pd.DataFrame) -> pd.DataFrame:
+    """Add synthetic meeting rows for reps on Gong calls who aren't the HubSpot meeting owner."""
+    if gong_summaries.empty:
+        return meetings
+
+    email_col = next((c for c in ("rep_email", "primary_rep_email") if c in gong_summaries.columns), None)
+    name_col = next((c for c in ("rep_name", "primary_rep") if c in gong_summaries.columns), None)
+    date_col = next((c for c in ("date", "started") if c in gong_summaries.columns), None)
+    if (email_col is None and name_col is None) or date_col is None:
+        return meetings
+
+    gong_summaries = gong_summaries.copy()
+    gong_summaries["_gong_date"] = pd.to_datetime(gong_summaries[date_col], errors="coerce").dt.normalize()
+
+    existing: set[tuple[str, str]] = set()
+    if not meetings.empty and "hubspot_owner_name" in meetings.columns and "meeting_start_time" in meetings.columns:
+        mtg_dates = pd.to_datetime(meetings["meeting_start_time"], errors="coerce").dt.normalize()
+        for rep, dt in zip(meetings["hubspot_owner_name"], mtg_dates):
+            if pd.notna(dt):
+                existing.add((str(rep), str(dt.date())))
+
+    new_rows = []
+    for _, gc in gong_summaries.iterrows():
+        rep = None
+        if email_col and pd.notna(gc.get(email_col)):
+            rep = _EMAIL_TO_REP.get(str(gc[email_col]).strip().lower())
+        if rep is None and name_col and pd.notna(gc.get(name_col)):
+            name = str(gc[name_col]).strip()
+            if name in REPS_IN_SCOPE:
+                rep = name
+        if rep is None:
+            continue
+
+        gong_date = gc["_gong_date"]
+        if pd.isna(gong_date):
+            continue
+        pair = (rep, str(gong_date.date()))
+        if pair in existing:
+            continue
+
+        new_rows.append({
+            "meeting_start_time": gong_date,
+            "hubspot_owner_name": rep,
+            "meeting_name": f"[Gong] {gc.get('title', 'Call')}",
+            "company_name": gc.get("external_participants", ""),
+            "meeting_outcome": "Completed",
+            "meeting_source": "Gong",
+        })
+        existing.add(pair)
+
+    if new_rows:
+        logger.info("Gong supplementation: adding %d meetings for non-owner reps.", len(new_rows))
+        meetings = pd.concat([meetings, pd.DataFrame(new_rows)], ignore_index=True)
+    return meetings
+
+
 def _filter_completed_meetings(df: pd.DataFrame) -> pd.DataFrame:
     """Only keep meetings with outcome 'Completed' — Scheduled meetings are not actual activity."""
     if df.empty or "meeting_outcome" not in df.columns:
@@ -106,9 +173,13 @@ def load_data():
         norm["emails"] = deduplicate_emails(norm["emails"])
 
     logger.info("Filtering...")
+    completed_meetings = _filter_completed_meetings(apply_activity_filters(norm.get("meetings", pd.DataFrame())))
+    gong_ai = norm.get("gong_ai_summaries", pd.DataFrame())
+    completed_meetings = _supplement_meetings_from_gong(completed_meetings, gong_ai)
+
     return {
         "deals": apply_deal_filters(norm.get("deals", pd.DataFrame())),
-        "meetings": _filter_completed_meetings(apply_activity_filters(norm.get("meetings", pd.DataFrame()))),
+        "meetings": completed_meetings,
         "calls": apply_activity_filters(norm.get("calls", pd.DataFrame())),
         "emails": apply_activity_filters(norm.get("emails", pd.DataFrame())),
         "notes": apply_activity_filters(norm.get("notes", pd.DataFrame())),
