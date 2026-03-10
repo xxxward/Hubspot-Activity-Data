@@ -150,19 +150,62 @@ def _titles_match(title_a: str, title_b: str) -> bool:
     return len(overlap) >= 1 and len(overlap) / smaller >= 0.5
 
 
+def _resolve_attendees(attendees_value) -> list[str]:
+    """Parse the all_attendees column into a list of in-scope rep names.
+
+    The column contains comma-separated names or emails, e.g.:
+      "Jake Lynch, Owen Labombard"
+      "jlynch@calyxcontainers.com, olabombard@calyxcontainers.com"
+    """
+    if pd.isna(attendees_value):
+        return []
+    raw = str(attendees_value).strip()
+    if not raw:
+        return []
+
+    reps = []
+    seen = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        # Try as email first
+        email_lower = part.lower()
+        if email_lower in _EMAIL_TO_REP:
+            name = _EMAIL_TO_REP[email_lower]
+            if name not in seen:
+                reps.append(name)
+                seen.add(name)
+            continue
+        # Try as name
+        if part in REPS_IN_SCOPE:
+            if part not in seen:
+                reps.append(part)
+                seen.add(part)
+            continue
+        # Try partial / case-insensitive name match
+        part_lower = part.lower()
+        for rep_name in REPS_IN_SCOPE:
+            if rep_name.lower() == part_lower and rep_name not in seen:
+                reps.append(rep_name)
+                seen.add(rep_name)
+                break
+    return reps
+
+
 def _supplement_meetings_from_gong(
     meetings: pd.DataFrame,
     gong_ai_summaries: pd.DataFrame,
     gong_calls: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
-    Credit reps who were on Gong-recorded calls but aren't the HubSpot
+    Credit reps who attended Gong-recorded meetings but aren't the HubSpot
     meeting owner.
 
-    The Gong AI Summaries tab has the correct rep attribution — e.g.,
-    a call might be 'owned' by Brittany Williams in HubSpot/Gong Calls,
-    but the AI summary correctly shows Jake Lynch as the rep who was on
-    the call and participated.  We use AI summaries as the source of truth.
+    Uses the ``all_attendees`` column (added to both Gong AI Summaries and
+    Gong Calls tabs) to identify every in-scope rep on a call.  Falls back
+    to the primary rep columns (rep_email / rep_name) when all_attendees is
+    not available.
 
     Only adds entries where the Gong Calls tab shows direction="Conference"
     (actual meetings).  Inbound/Outbound calls are phone calls, not meetings.
@@ -192,33 +235,25 @@ def _supplement_meetings_from_gong(
         logger.warning("Cannot filter Gong by direction — missing call_id or gong_calls. Skipping supplementation.")
         return meetings
 
-    # Find columns — AI summaries use rep_name/rep_email; prioritize those
+    # Detect the all_attendees column (snake_case normalized)
+    attendees_col = next((c for c in ("all_attendees",) if c in gong_ai_summaries.columns), None)
+
+    # Fallback columns for primary rep (used when all_attendees is absent)
     email_col = next((c for c in ("rep_email", "primary_rep_email") if c in gong_ai_summaries.columns), None)
     name_col = next((c for c in ("rep_name", "primary_rep") if c in gong_ai_summaries.columns), None)
     date_col = next((c for c in ("date", "started", "scheduled") if c in gong_ai_summaries.columns), None)
 
-    if (email_col is None and name_col is None) or date_col is None:
-        logger.info("Gong AI summaries missing rep or date columns — skipping supplementation.")
+    if attendees_col is None and email_col is None and name_col is None:
+        logger.info("Gong AI summaries missing attendee and rep columns — skipping supplementation.")
+        return meetings
+    if date_col is None:
+        logger.info("Gong AI summaries missing date column — skipping supplementation.")
         return meetings
 
-    # Resolve each Gong call's rep to a HubSpot rep name
-    def _resolve_rep(row):
-        if email_col and pd.notna(row.get(email_col)):
-            email = str(row[email_col]).strip().lower()
-            if email in _EMAIL_TO_REP:
-                return _EMAIL_TO_REP[email]
-        if name_col and pd.notna(row.get(name_col)):
-            name = str(row[name_col]).strip()
-            if name in REPS_IN_SCOPE:
-                return name
-        return None
+    if attendees_col:
+        logger.info("Using all_attendees column for Gong meeting attribution.")
 
     gong = gong_ai_summaries.copy()
-    gong["_resolved_rep"] = gong.apply(_resolve_rep, axis=1)
-    gong = gong[gong["_resolved_rep"].notna()]
-
-    if gong.empty:
-        return meetings
 
     gong_dates = pd.to_datetime(gong[date_col], errors="coerce")
     if gong_dates.dt.tz is not None:
@@ -241,38 +276,57 @@ def _supplement_meetings_from_gong(
     # Create synthetic meeting rows for Gong calls not already credited
     new_rows = []
     for _, gc in gong.iterrows():
-        rep = gc["_resolved_rep"]
         gong_date = gc["_gong_date"]
         if pd.isna(gong_date):
             continue
 
-        title = str(gc.get("title", "Gong Call"))
-        date_key = (rep, str(gong_date.date()))
+        # Resolve all attending reps from the all_attendees column
+        if attendees_col:
+            reps = _resolve_attendees(gc.get(attendees_col))
+        else:
+            # Fallback: resolve single primary rep from email/name columns
+            reps = []
+            if email_col and pd.notna(gc.get(email_col)):
+                email = str(gc[email_col]).strip().lower()
+                if email in _EMAIL_TO_REP:
+                    reps.append(_EMAIL_TO_REP[email])
+            if not reps and name_col and pd.notna(gc.get(name_col)):
+                name = str(gc[name_col]).strip()
+                if name in REPS_IN_SCOPE:
+                    reps.append(name)
 
-        # Check if this Gong call fuzzy-matches any existing meeting for this rep+date
-        already_exists = False
-        for existing_title in existing_titles.get(date_key, []):
-            if _titles_match(title, existing_title):
-                already_exists = True
-                break
-        if already_exists:
+        if not reps:
             continue
 
-        new_rows.append({
-            "meeting_start_time": gong_date,
-            "hubspot_owner_name": rep,
-            "meeting_name": f"[Gong] {title}",
-            "company_name": gc.get("external_participants", ""),
-            "meeting_outcome": "Completed",
-            "meeting_source": "Gong",
-            "has_gong": True,
-            "_counts_as_meeting": True,
-        })
-        # Add to existing so subsequent Gong entries also dedup against this one
-        existing_titles.setdefault(date_key, []).append(f"[Gong] {title}")
+        title = str(gc.get("title", "Gong Call"))
+
+        for rep in reps:
+            date_key = (rep, str(gong_date.date()))
+
+            # Check if this Gong call fuzzy-matches any existing meeting for this rep+date
+            already_exists = False
+            for existing_title in existing_titles.get(date_key, []):
+                if _titles_match(title, existing_title):
+                    already_exists = True
+                    break
+            if already_exists:
+                continue
+
+            new_rows.append({
+                "meeting_start_time": gong_date,
+                "hubspot_owner_name": rep,
+                "meeting_name": f"[Gong] {title}",
+                "company_name": gc.get("external_participants", ""),
+                "meeting_outcome": "Completed",
+                "meeting_source": "Gong",
+                "has_gong": True,
+                "_counts_as_meeting": True,
+            })
+            # Add to existing so subsequent Gong entries also dedup against this one
+            existing_titles.setdefault(date_key, []).append(f"[Gong] {title}")
 
     if new_rows:
-        logger.info("Gong supplementation: adding %d meetings for non-owner reps.", len(new_rows))
+        logger.info("Gong supplementation: adding %d meetings from attendees.", len(new_rows))
         meetings = pd.concat([meetings, pd.DataFrame(new_rows)], ignore_index=True)
     else:
         logger.info("Gong supplementation: no additional meetings to add.")
