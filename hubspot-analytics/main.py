@@ -357,22 +357,10 @@ def load_all() -> AnalyticsData:
 
     calls = apply_activity_filters(norm.get("calls", pd.DataFrame()))
 
-    # 6c - Reclassify "Conference" calls as meetings (these are multi-party
-    # meetings that HubSpot logged as calls)
-    if not calls.empty and "call_direction" in calls.columns:
-        conf_mask = calls["call_direction"].str.strip().str.lower() == "conference"
-        conf_calls = calls[conf_mask].copy()
-        if not conf_calls.empty:
-            logger.info("Reclassifying %d conference calls as meetings.", len(conf_calls))
-            # Map call columns to meeting columns
-            conf_calls["meeting_name"] = conf_calls.get("call_title", conf_calls.get("activity_type", "Conference Call"))
-            conf_calls["meeting_start_time"] = conf_calls.get("activity_date", pd.NaT)
-            conf_calls["meeting_outcome"] = "Completed"
-            conf_calls["meeting_source"] = "Conference Call"
-            conf_calls["has_gong"] = False
-            conf_calls["_counts_as_meeting"] = True
-            meetings = pd.concat([meetings, conf_calls], ignore_index=True)
-            calls = calls[~conf_mask]
+    # Note: Conference calls are NOT reclassified as meetings here.
+    # Real meetings are captured via HubSpot meetings (Completed outcome)
+    # + Gong AI Summaries (Conference direction).  Reclassifying HubSpot
+    # "conference" calls inflated SDR meeting counts (e.g., Owen's multi-line dials).
 
     emails = apply_activity_filters(norm.get("emails", pd.DataFrame()))
     notes = apply_activity_filters(norm.get("notes", pd.DataFrame()))

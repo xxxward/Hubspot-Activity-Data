@@ -280,18 +280,8 @@ def load_data():
 
     calls = apply_activity_filters(norm.get("calls", pd.DataFrame()))
 
-    # Reclassify "Conference" calls as meetings
-    if not calls.empty and "call_direction" in calls.columns:
-        conf_mask = calls["call_direction"].str.strip().str.lower() == "conference"
-        conf_calls = calls[conf_mask].copy()
-        if not conf_calls.empty:
-            logger.info("Reclassifying %d conference calls as meetings.", len(conf_calls))
-            conf_calls["meeting_name"] = conf_calls.get("call_title", conf_calls.get("activity_type", "Conference Call"))
-            conf_calls["meeting_start_time"] = conf_calls.get("activity_date", pd.NaT)
-            conf_calls["meeting_outcome"] = "Completed"
-            conf_calls["meeting_source"] = "Conference Call"
-            completed_meetings = pd.concat([completed_meetings, conf_calls], ignore_index=True)
-            calls = calls[~conf_mask]
+    # Note: Conference calls are NOT reclassified as meetings.
+    # Real meetings come from HubSpot (Completed) + Gong AI Summaries (Conference direction).
 
     return {
         "deals": apply_deal_filters(norm.get("deals", pd.DataFrame())),
