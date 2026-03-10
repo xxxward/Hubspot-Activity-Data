@@ -28,7 +28,13 @@ DEFAULT_TABS: dict[str, str] = {
     "emails": "Emails",
     "notes": "Notes",
     "new_pipeline": "New Pipeline",
+    "gong_ai_summaries": "Gong AI Summaries",
+    "gong_calls": "Gong Calls",
+    "gong_users": "Gong Users",
 }
+
+# Tabs created by Google Apps Script (not Coefficient) have headers in row 1
+_GONG_TABS = {"Gong AI Summaries", "Gong Calls", "Gong Users", "Sync Log"}
 
 
 def _build_client() -> gspread.Client:
@@ -49,7 +55,11 @@ def _build_client() -> gspread.Client:
 
 
 def _read_tab(spreadsheet: gspread.Spreadsheet, tab_name: str) -> pd.DataFrame:
-    """Read one worksheet tab into a DataFrame (Coefficient row-2 headers)."""
+    """Read one worksheet tab into a DataFrame.
+
+    Coefficient tabs: headers in row 2 (row 1 is metadata/blank).
+    Gong tabs (Apps Script): headers in row 1.
+    """
     try:
         ws = spreadsheet.worksheet(tab_name)
     except gspread.exceptions.WorksheetNotFound:
@@ -57,12 +67,22 @@ def _read_tab(spreadsheet: gspread.Spreadsheet, tab_name: str) -> pd.DataFrame:
         return pd.DataFrame()
 
     all_values = ws.get_all_values()
-    if len(all_values) < 3:
-        logger.warning("Tab '%s' has fewer than 3 rows - returning empty DataFrame.", tab_name)
-        return pd.DataFrame()
 
-    headers = all_values[1]
-    data_rows = all_values[2:]
+    is_gong_tab = tab_name in _GONG_TABS
+
+    if is_gong_tab:
+        if len(all_values) < 2:
+            logger.warning("Tab '%s' has fewer than 2 rows - returning empty DataFrame.", tab_name)
+            return pd.DataFrame()
+        headers = all_values[0]
+        data_rows = all_values[1:]
+    else:
+        if len(all_values) < 3:
+            logger.warning("Tab '%s' has fewer than 3 rows - returning empty DataFrame.", tab_name)
+            return pd.DataFrame()
+        headers = all_values[1]
+        data_rows = all_values[2:]
+
     df = pd.DataFrame(data_rows, columns=headers)
     df = df.loc[:, df.columns != ""]
     df = df.loc[:, df.columns.notna()]

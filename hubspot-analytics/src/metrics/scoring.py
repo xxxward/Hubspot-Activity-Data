@@ -1,10 +1,8 @@
 """
 Composite activity score per rep.
 
-Formula (no emails tab currently):
-    meetings × 5  +  calls × 3  +  completed_tasks × 2  +  overdue_tasks × (−2)
-
-If an emails column appears later it will be weighted × 1.
+Formula:
+    meetings x 5  +  calls x 3  +  emails x 1
 """
 
 import logging
@@ -17,8 +15,6 @@ WEIGHTS: dict[str, int] = {
     "meetings": 5,
     "calls": 3,
     "emails": 1,
-    "completed_tasks": 2,
-    "overdue_tasks": -2,
 }
 
 
@@ -36,7 +32,7 @@ def compute_activity_score(
     """
     Total activity score per rep (summed across all periods).
 
-    Returns one row per rep: rep | meetings | calls | … | activity_score
+    Returns one row per rep: rep | meetings | calls | emails | activity_score
     """
     if activity_counts.empty:
         return pd.DataFrame(columns=[owner_col] + list(WEIGHTS) + ["activity_score"])

@@ -504,7 +504,6 @@ NAV_SECTIONS = [
     ("calls",   "📞", "Calls"),
     ("meetings","📅", "Meetings"),
     ("emails",  "📧", "Emails"),
-    ("tasks",   "✅", "Tasks"),
     ("notes",   "📝", "Notes"),
     ("tickets", "🎫", "Tickets"),
     ("gong",    "🎙", "Gong Intelligence"),
@@ -518,10 +517,9 @@ _counts = {
     "calls": len(data.calls) if not data.calls.empty else 0,
     "meetings": len(data.meetings) if not data.meetings.empty else 0,
     "emails": len(data.emails) if not data.emails.empty else 0,
-    "tasks": len(data.tasks) if not data.tasks.empty else 0,
     "notes": len(data.notes) if not data.notes.empty else 0,
     "tickets": len(data.tickets) if not data.tickets.empty else 0,
-    "gong": len(data.gong_calls) if not data.gong_calls.empty else 0,
+    "gong": len(data.gong_ai_summaries) if not data.gong_ai_summaries.empty else 0,
     "deals": len(data.deals) if not data.deals.empty else 0,
     "forecast": len(data.deals_closing_this_quarter) if not data.deals_closing_this_quarter.empty else 0,
 }
@@ -559,7 +557,7 @@ with st.sidebar:
     st.markdown(f"""<div class="sidebar-footer">
         ⏱ Last refreshed: {refresh_str}<br>
         {len(data.deals)} deals · {len(data.calls)} calls · {len(data.meetings)} mtgs<br>
-        {len(data.emails)} emails · {len(data.tasks)} tasks · {len(data.tickets)} tickets
+        {len(data.emails)} emails · {len(data.tickets)} tickets
     </div>""", unsafe_allow_html=True)
 
 
@@ -798,23 +796,10 @@ fe = _fdate_raw(_frep(data.emails), "activity_date")
 fn = _fdate_raw(_frep(data.notes), "activity_date")
 fk = _fdate_raw(_frep(data.tickets), "created_date")
 
-# Tasks: try activity_date first, then created_date, then due_date
-ft_all = _frep(data.tasks)
-if not ft_all.empty:
-    task_dt = pd.Series(pd.NaT, index=ft_all.index)
-    for try_col in ("activity_date", "created_date", "due_date", "completed_at"):
-        if try_col in ft_all.columns:
-            candidate = pd.to_datetime(ft_all[try_col], errors="coerce")
-            if candidate.dt.tz is not None:
-                candidate = candidate.dt.tz_localize(None)
-            task_dt = task_dt.fillna(candidate)
-    start_ts = pd.Timestamp(start_date)
-    end_ts = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-    ft = ft_all[task_dt.notna() & (task_dt >= start_ts) & (task_dt <= end_ts)].copy()
-else:
-    ft = ft_all
+# Tasks removed from tracking — keeping empty ft for backward compat
+ft = pd.DataFrame()
 
-total_activities = len(fm) + len(fc) + len(ft) + len(fe) + len(fn) + len(fk)
+total_activities = len(fm) + len(fc) + len(fe) + len(fn) + len(fk)
 
 # ── Data Diagnostics (toggle in sidebar) ──
 with st.sidebar.expander("🔧 Debug: Date Diagnostics"):
@@ -825,7 +810,7 @@ with st.sidebar.expander("🔧 Debug: Date Diagnostics"):
         ("Emails (raw)", data.emails, "activity_date"),
         ("Notes (raw)", data.notes, "activity_date"),
         ("Tickets (raw)", data.tickets, "created_date"),
-        ("Tasks (raw)", data.tasks, "activity_date"),
+        # Tasks removed from tracking
     ]:
         if not src_df.empty and dt_col in src_df.columns:
             dts = pd.to_datetime(src_df[dt_col], errors="coerce").dropna()
@@ -933,19 +918,19 @@ AI_MODEL_SMART = "claude-sonnet-4-20250514"    # For single-deal coaching
 ROLE_WEIGHTS = {
     "sdr": {
         "meetings": 8, "calls": 1, "emails": 0.5,
-        "completed_tasks": 2, "overdue_tasks": -3, "tickets": 1, "notes": 0.5,
+        "tickets": 1, "notes": 0.5,
     },
     "acquisition": {
         "meetings": 6, "calls": 3, "emails": 1,
-        "completed_tasks": 3, "overdue_tasks": -5, "tickets": 2, "notes": 1,
+        "tickets": 2, "notes": 1,
     },
     "am": {
         "meetings": 10, "calls": 4, "emails": 1.5,
-        "completed_tasks": 3, "overdue_tasks": -5, "tickets": 3, "notes": 1.5,
+        "tickets": 3, "notes": 1.5,
     },
     "ceo": {
         "meetings": 5, "calls": 2, "emails": 1,
-        "completed_tasks": 1, "overdue_tasks": -1, "tickets": 1, "notes": 0.5,
+        "tickets": 1, "notes": 0.5,
     },
 }
 
@@ -1236,25 +1221,11 @@ def build_leaderboard():
         n_w = _deal_tier_multiplier(rn) if not rn.empty else 0
         k_w = _deal_tier_multiplier(rk) if not rk.empty else 0
 
-        comp, over = 0, 0
-        if not ft.empty and "hubspot_owner_name" in ft.columns:
-            rt = ft[ft["hubspot_owner_name"] == rep]
-            if not rt.empty and "task_status" in rt.columns:
-                status = rt["task_status"].astype(str).str.upper().str.strip()
-                comp = int(status.isin({"COMPLETED", "COMPLETE", "DONE"}).sum())
-                if "due_date" in rt.columns:
-                    due = pd.to_datetime(rt["due_date"], errors="coerce")
-                    not_done = ~status.isin({"COMPLETED", "COMPLETE", "DONE"})
-                    past_due = due.notna() & (due < pd.Timestamp(date.today()))
-                    over = int((not_done & past_due).sum())
-
         # Base score (role-weighted × deal-tier)
         base_score = (
             m_w * weights["meetings"] +
             c_w * weights["calls"] +
             e_w * weights["emails"] +
-            comp * weights["completed_tasks"] +
-            over * weights["overdue_tasks"] +
             k_w * weights["tickets"] +
             n_w * weights["notes"]
         )
@@ -1282,7 +1253,7 @@ def build_leaderboard():
 
         rows.append({
             "Rep": rep, "Role": role, "Meetings": m, "Calls": c, "Emails": e,
-            "Tasks": comp, "Overdue": over, "Notes": n, "Tickets": k,
+            "Notes": n, "Tickets": k,
             "Base Score": round(base_score, 1), "Streak": streak,
             "WoW": f"{'▲' if wow > 1 else '▼' if wow < 1 else '—'} {abs(wow - 1) * 100:.0f}%",
             "Streak 🔥": f"{'🔥 ' if streak >= 5 else ''}{streak}d",
@@ -2164,40 +2135,52 @@ elif st.session_state.page == "notes":
 elif st.session_state.page == "gong":
 
     st.markdown("""<div class="page-header">
-        <h1>🎙️ Gong Call Intelligence</h1>
-        <p class="page-sub">AI-enriched call analytics — talk ratios, topics, and conversation insights.</p>
+        <h1>🎙️ Gong Intelligence</h1>
+        <p class="page-sub">AI call summaries, key points, and conversation insights — powered by your Google Sheet sync.</p>
     </div>""", unsafe_allow_html=True)
 
-    fg = data.gong_calls
-    if fg.empty:
-        empty_state("No Gong data available. Add GONG_ACCESS_KEY and GONG_SECRET_KEY to your secrets to enable. 🎙️")
+    # Use Gong AI Summaries as primary data source (richer than raw calls)
+    fg_summaries = data.gong_ai_summaries.copy()
+    fg_calls = data.gong_calls.copy()
+
+    if fg_summaries.empty and fg_calls.empty:
+        empty_state("No Gong data available. Make sure the Gong AI Summaries and Gong Calls tabs are synced in your Google Sheet.")
     else:
-        # Apply rep filter if gong data has hubspot_owner_name
-        if "hubspot_owner_name" in fg.columns:
-            fg = _frep(fg)
+        # Use whichever has data; prefer summaries
+        fg = fg_summaries if not fg_summaries.empty else fg_calls
+
+        # Apply rep filter if we have a rep name column
+        rep_col = None
+        for c in ("rep_name", "primary_rep", "hubspot_owner_name"):
+            if c in fg.columns:
+                rep_col = c
+                break
+        if rep_col:
+            fg = fg[fg[rep_col].isin(selected_reps)] if selected_reps else fg
 
         n_gong = len(fg)
         avg_duration = 0
-        if "call_duration_seconds" in fg.columns:
-            dur = pd.to_numeric(fg["call_duration_seconds"], errors="coerce")
+        dur_col = "duration_sec" if "duration_sec" in fg.columns else "duration_sec_"
+        if dur_col in fg.columns:
+            dur = pd.to_numeric(fg[dur_col], errors="coerce")
             avg_duration = dur.mean() / 60 if dur.notna().any() else 0
-
-        avg_talk = None
-        if "talk_ratio" in fg.columns:
-            tr = pd.to_numeric(fg["talk_ratio"], errors="coerce")
-            avg_talk = tr.mean() if tr.notna().any() else None
-
-        avg_questions = 0
-        if "question_count" in fg.columns:
-            avg_questions = pd.to_numeric(fg["question_count"], errors="coerce").mean()
 
         kpi_items = [
             ("Recorded Calls", f"{n_gong:,}", "cyan"),
             ("Avg Duration", f"{avg_duration:.0f} min", "blue"),
         ]
-        if avg_talk is not None:
-            kpi_items.append(("Avg Talk Ratio", f"{avg_talk:.0%}", "green"))
-        kpi_items.append(("Avg Questions", f"{avg_questions:.1f}", "amber"))
+
+        # Count calls with AI summaries available
+        if not fg_summaries.empty:
+            summary_col = None
+            for c in ("brief_summary", "summary", "key_points"):
+                if c in fg_summaries.columns:
+                    summary_col = c
+                    break
+            if summary_col:
+                n_with_summary = fg_summaries[summary_col].notna().sum()
+                kpi_items.append(("AI Summaries", f"{n_with_summary:,}", "green"))
+
         kpi(kpi_items)
 
         section_divider()
@@ -2206,8 +2189,8 @@ elif st.session_state.page == "gong":
         gc1, gc2 = st.columns(2)
         with gc1:
             section_header("👤", "Calls by Rep", C.get("gong", "#67e8f9"))
-            if "hubspot_owner_name" in fg.columns:
-                rep_counts = fg["hubspot_owner_name"].value_counts().reset_index()
+            if rep_col and rep_col in fg.columns:
+                rep_counts = fg[rep_col].value_counts().reset_index()
                 rep_counts.columns = ["Rep", "Calls"]
                 fig = px.bar(rep_counts, x="Rep", y="Calls", color_discrete_sequence=[C.get("gong", "#67e8f9")])
                 fig.update_layout(xaxis_title="", yaxis_title="")
@@ -2215,36 +2198,22 @@ elif st.session_state.page == "gong":
 
         with gc2:
             section_header("⏱️", "Call Duration Distribution", C.get("gong", "#67e8f9"))
-            if "call_duration_seconds" in fg.columns:
-                dur_min = pd.to_numeric(fg["call_duration_seconds"], errors="coerce") / 60
+            if dur_col in fg.columns:
+                dur_min = pd.to_numeric(fg[dur_col], errors="coerce") / 60
                 dur_df = pd.DataFrame({"Duration (min)": dur_min.dropna()})
-                fig = px.histogram(dur_df, x="Duration (min)", nbins=15, color_discrete_sequence=[C.get("gong", "#67e8f9")])
-                fig.update_layout(xaxis_title="Minutes", yaxis_title="Count")
-                st.plotly_chart(styled_fig(fig, 280), use_container_width=True)
+                if not dur_df.empty:
+                    fig = px.histogram(dur_df, x="Duration (min)", nbins=15, color_discrete_sequence=[C.get("gong", "#67e8f9")])
+                    fig.update_layout(xaxis_title="Minutes", yaxis_title="Count")
+                    st.plotly_chart(styled_fig(fig, 280), use_container_width=True)
 
         section_divider()
 
         gc3, gc4 = st.columns(2)
         with gc3:
-            section_header("🗣️", "Talk Ratio by Rep", C["green"])
-            if "talk_ratio" in fg.columns and "hubspot_owner_name" in fg.columns:
-                tr_data = fg[["hubspot_owner_name", "talk_ratio"]].copy()
-                tr_data["talk_ratio"] = pd.to_numeric(tr_data["talk_ratio"], errors="coerce")
-                tr_data = tr_data.dropna()
-                if not tr_data.empty:
-                    avg_by_rep = tr_data.groupby("hubspot_owner_name")["talk_ratio"].mean().reset_index()
-                    avg_by_rep.columns = ["Rep", "Talk Ratio"]
-                    avg_by_rep["Talk %"] = avg_by_rep["Talk Ratio"] * 100
-                    fig = px.bar(avg_by_rep, x="Rep", y="Talk %", color_discrete_sequence=[C["green"]])
-                    fig.update_layout(xaxis_title="", yaxis_title="Talk %")
-                    fig.add_hline(y=50, line_dash="dash", line_color="#6a6283", annotation_text="50%")
-                    st.plotly_chart(styled_fig(fig, 280), use_container_width=True)
-
-        with gc4:
             section_header("💬", "Top Topics Discussed", C["purple"])
             if "topics" in fg.columns:
-                all_topics = fg["topics"].dropna().str.split(", ").explode().str.strip()
-                all_topics = all_topics[all_topics != ""]
+                all_topics = fg["topics"].dropna().astype(str).str.split(",").explode().str.strip()
+                all_topics = all_topics[(all_topics != "") & (all_topics != "nan")]
                 if not all_topics.empty:
                     top_topics = all_topics.value_counts().head(10).reset_index()
                     top_topics.columns = ["Topic", "Count"]
@@ -2255,22 +2224,89 @@ elif st.session_state.page == "gong":
                 else:
                     st.caption("No topic data available yet.")
 
+        with gc4:
+            section_header("🔔", "Top Trackers Fired", C["green"])
+            trackers_col = "trackers_fired" if "trackers_fired" in fg.columns else "trackers"
+            if trackers_col in fg.columns:
+                all_trackers = fg[trackers_col].dropna().astype(str).str.split(",").explode().str.strip()
+                all_trackers = all_trackers[(all_trackers != "") & (all_trackers != "nan")]
+                if not all_trackers.empty:
+                    top_trackers = all_trackers.value_counts().head(10).reset_index()
+                    top_trackers.columns = ["Tracker", "Count"]
+                    fig = px.bar(top_trackers, y="Tracker", x="Count", orientation="h",
+                                 color_discrete_sequence=[C["green"]])
+                    fig.update_layout(xaxis_title="", yaxis_title="", yaxis=dict(autorange="reversed"))
+                    st.plotly_chart(styled_fig(fig, 280), use_container_width=True)
+                else:
+                    st.caption("No tracker data available yet.")
+
         section_divider()
 
-        # Detail table
-        section_header("📋", "All Gong Calls", C.get("gong", "#67e8f9"))
-        gong_cols = [c for c in ("call_start", "hubspot_owner_name", "company_name", "call_title",
-                                  "call_duration_seconds", "call_direction", "talk_ratio",
-                                  "question_count", "topics", "trackers") if c in fg.columns]
-        if gong_cols:
-            fg_display = fg[gong_cols].copy()
-            if "call_duration_seconds" in fg_display.columns:
-                fg_display["call_duration_seconds"] = (pd.to_numeric(fg_display["call_duration_seconds"], errors="coerce") / 60).round(1)
-                fg_display = fg_display.rename(columns={"call_duration_seconds": "duration_min"})
-            if "talk_ratio" in fg_display.columns:
-                fg_display["talk_ratio"] = pd.to_numeric(fg_display["talk_ratio"], errors="coerce").apply(
-                    lambda x: f"{x:.0%}" if pd.notna(x) else "—")
-            st.dataframe(_display_df(fg_display), use_container_width=True, hide_index=True)
+        # AI Summaries detail view (the real value)
+        if not fg_summaries.empty:
+            section_header("🧠", "AI Call Summaries", C.get("gong", "#67e8f9"))
+
+            # Show most recent calls with their AI summaries
+            summary_display = fg_summaries.copy()
+            date_col = "date" if "date" in summary_display.columns else None
+            if date_col:
+                summary_display[date_col] = pd.to_datetime(summary_display[date_col], errors="coerce")
+                summary_display = summary_display.sort_values(date_col, ascending=False)
+
+            # Display columns for the summary table
+            sum_cols = [c for c in (
+                "date", "rep_name", "title", "duration_sec",
+                "external_participants", "call_outcome",
+                "brief_summary", "key_points", "topics", "trackers_fired", "gong_url",
+            ) if c in summary_display.columns]
+
+            if sum_cols:
+                disp = summary_display[sum_cols].head(50).copy()
+                if "duration_sec" in disp.columns:
+                    disp["duration_sec"] = (pd.to_numeric(disp["duration_sec"], errors="coerce") / 60).round(1)
+                    disp = disp.rename(columns={"duration_sec": "duration_min"})
+                st.dataframe(_display_df(disp), use_container_width=True, hide_index=True)
+
+            section_divider()
+
+            # Expandable detail for each recent call
+            section_header("📋", "Recent Call Details", C.get("gong", "#67e8f9"))
+            for _, row in summary_display.head(15).iterrows():
+                call_title = row.get("title", "Call")
+                call_date = row.get("date", "")
+                if pd.notna(call_date) and hasattr(call_date, "strftime"):
+                    call_date = call_date.strftime("%b %d, %Y")
+                rep = row.get("rep_name", "")
+                with st.expander(f"**{call_title}** — {rep} — {call_date}", expanded=False):
+                    brief = row.get("brief_summary", "")
+                    if pd.notna(brief) and str(brief).strip():
+                        st.markdown(f"**Summary:** {brief}")
+                    key_pts = row.get("key_points", "")
+                    if pd.notna(key_pts) and str(key_pts).strip():
+                        st.markdown(f"**Key Points:** {key_pts}")
+                    outline = row.get("outline", "")
+                    if pd.notna(outline) and str(outline).strip():
+                        st.markdown(f"**Outline:** {outline}")
+                    highlights = row.get("highlights", "")
+                    if pd.notna(highlights) and str(highlights).strip():
+                        st.markdown(f"**Highlights:** {highlights}")
+                    gong_url = row.get("gong_url", "")
+                    if pd.notna(gong_url) and str(gong_url).strip():
+                        st.markdown(f"[Open in Gong]({gong_url})")
+
+        else:
+            # Fallback: show raw Gong Calls table
+            section_header("📋", "All Gong Calls", C.get("gong", "#67e8f9"))
+            call_cols = [c for c in (
+                "started", "primary_rep", "title", "duration_sec",
+                "direction", "external_participants", "topics", "trackers", "url",
+            ) if c in fg_calls.columns]
+            if call_cols:
+                disp = fg_calls[call_cols].copy()
+                if "duration_sec" in disp.columns:
+                    disp["duration_sec"] = (pd.to_numeric(disp["duration_sec"], errors="coerce") / 60).round(1)
+                    disp = disp.rename(columns={"duration_sec": "duration_min"})
+                st.dataframe(_display_df(disp), use_container_width=True, hide_index=True)
 
 
 # ════════════════════════════════════════════════════════════════════════

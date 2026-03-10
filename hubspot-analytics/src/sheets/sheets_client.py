@@ -30,6 +30,9 @@ DEFAULT_TABS: dict[str, str] = {
     "emails": "Emails",
     "notes": "Notes",
     "new_pipeline": "New Pipeline",
+    "gong_ai_summaries": "Gong AI Summaries",
+    "gong_calls": "Gong Calls",
+    "gong_users": "Gong Users",
 }
 
 
@@ -60,15 +63,16 @@ def _get_spreadsheet_id() -> str:
         raise EnvironmentError("Streamlit secret 'SPREADSHEET_ID' not found.")
 
 
+# Tabs created by Google Apps Script (not Coefficient) have headers in row 1
+_GONG_TABS = {"Gong AI Summaries", "Gong Calls", "Gong Users", "Sync Log"}
+
+
 def _read_tab(spreadsheet: gspread.Spreadsheet, tab_name: str) -> pd.DataFrame:
     """
     Read one worksheet tab into a DataFrame.
 
-    Coefficient places headers in row 2, so we:
-      1. get_all_values() to grab the raw grid
-      2. Use row index 1 (second row) as column headers
-      3. Data starts from row index 2 onward
-      4. Drop any columns with blank headers
+    Coefficient tabs: headers in row 2 (row 1 is metadata/blank).
+    Gong tabs (Apps Script): headers in row 1.
     """
     try:
         ws = spreadsheet.worksheet(tab_name)
@@ -77,18 +81,27 @@ def _read_tab(spreadsheet: gspread.Spreadsheet, tab_name: str) -> pd.DataFrame:
         return pd.DataFrame()
 
     all_values = ws.get_all_values()
-    if len(all_values) < 3:
-        # Need at least: row 0 (Coefficient meta), row 1 (headers), row 2+ (data)
-        logger.warning("Tab '%s' has fewer than 3 rows - returning empty DataFrame.", tab_name)
-        return pd.DataFrame()
 
-    # Row 1 = headers (index 1), rows 2+ = data
-    headers = all_values[1]
-    data_rows = all_values[2:]
+    is_gong_tab = tab_name in _GONG_TABS
+
+    if is_gong_tab:
+        # Apps Script tabs: row 0 = headers, row 1+ = data
+        if len(all_values) < 2:
+            logger.warning("Tab '%s' has fewer than 2 rows - returning empty DataFrame.", tab_name)
+            return pd.DataFrame()
+        headers = all_values[0]
+        data_rows = all_values[1:]
+    else:
+        # Coefficient tabs: row 0 = meta, row 1 = headers, row 2+ = data
+        if len(all_values) < 3:
+            logger.warning("Tab '%s' has fewer than 3 rows - returning empty DataFrame.", tab_name)
+            return pd.DataFrame()
+        headers = all_values[1]
+        data_rows = all_values[2:]
 
     df = pd.DataFrame(data_rows, columns=headers)
 
-    # Drop columns with blank/empty headers (Coefficient trailing blanks)
+    # Drop columns with blank/empty headers
     df = df.loc[:, df.columns != ""]
     df = df.loc[:, df.columns.notna()]
 
