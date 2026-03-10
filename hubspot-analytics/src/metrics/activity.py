@@ -1,12 +1,10 @@
 """
-Activity metrics: count calls, meetings, completed tasks, overdue tasks
+Activity metrics: count calls, meetings, and emails
 by rep at daily / weekly / monthly grain.
 
 Also builds a combined activity log for timeline views.
 
-NOTE: Your spreadsheet has no dedicated Emails tab, so email counts
-are omitted.  If an Emails tab is added later, pass it here and
-it will be picked up automatically.
+Tasks are excluded — underutilized and inconsistently used across reps.
 """
 
 import logging
@@ -64,51 +62,11 @@ def _prepare(df: pd.DataFrame, activity_type: str) -> pd.DataFrame:
     return df
 
 
-def _split_tasks(tasks: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Split tasks into completed vs overdue.
-
-    Logic:
-      - 'Completed' task_status → completed
-      - 'Overdue'/'Deferred' status → overdue
-      - Not completed AND past due_date → overdue
-    """
-    if tasks.empty:
-        return pd.DataFrame(), pd.DataFrame()
-
-    tasks = _prepare(tasks, "task")
-
-    # Find the status column
-    status_col = None
-    for c in ("task_status", "status", "hs_task_status"):
-        if c in tasks.columns:
-            status_col = c
-            break
-
-    if status_col is None:
-        logger.warning("No task_status column — treating all tasks as completed.")
-        return tasks, pd.DataFrame()
-
-    upper = tasks[status_col].astype(str).str.upper().str.strip()
-    completed_mask = upper.isin({"COMPLETED", "COMPLETE", "DONE"})
-
-    # Overdue: explicit status OR past due_date + not completed
-    overdue_mask = upper.isin({"OVERDUE", "PAST_DUE", "DEFERRED"})
-    for c in ("due_date", "hs_task_due_date"):
-        if c in tasks.columns:
-            past_due = pd.to_datetime(tasks[c], errors="coerce") < pd.Timestamp.now()
-            overdue_mask = overdue_mask | (past_due & ~completed_mask)
-            break
-
-    return tasks.loc[completed_mask].copy(), tasks.loc[overdue_mask].copy()
-
-
 # ── Public API ──────────────────────────────────────────────────────
 
 def count_activities(
     calls: pd.DataFrame,
     meetings: pd.DataFrame,
-    tasks: pd.DataFrame,
     emails: pd.DataFrame | None = None,
 ) -> dict[str, pd.DataFrame]:
     """
@@ -121,9 +79,6 @@ def count_activities(
     """
     calls = _prepare(calls, "call")
     meetings = _prepare(meetings, "meeting")
-    tasks_completed, tasks_overdue = _split_tasks(tasks)
-    tasks_completed = _prepare(tasks_completed, "completed_task")
-    tasks_overdue = _prepare(tasks_overdue, "overdue_task")
 
     email_df = pd.DataFrame()
     if emails is not None and not emails.empty:
@@ -141,8 +96,6 @@ def count_activities(
             (meetings, "meetings"),
             (calls, "calls"),
             (email_df, "emails"),
-            (tasks_completed, "completed_tasks"),
-            (tasks_overdue, "overdue_tasks"),
         ]:
             counted = _count_by_rep_period(df, period_col, metric)
             if not counted.empty:
@@ -157,7 +110,7 @@ def count_activities(
         for f in frames[1:]:
             merged = pd.merge(merged, f, on=[owner, period_col], how="outer")
 
-        metric_cols = ["meetings", "calls", "emails", "completed_tasks", "overdue_tasks"]
+        metric_cols = ["meetings", "calls", "emails"]
         for mc in metric_cols:
             if mc in merged.columns:
                 merged[mc] = merged[mc].fillna(0).astype(int)
@@ -172,12 +125,11 @@ def count_activities(
 def build_combined_activity_log(
     calls: pd.DataFrame,
     meetings: pd.DataFrame,
-    tasks: pd.DataFrame,
     emails: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Single combined activity log — one row per activity."""
     frames = []
-    for df, atype in [(calls, "call"), (meetings, "meeting"), (tasks, "task")]:
+    for df, atype in [(calls, "call"), (meetings, "meeting")]:
         if not df.empty:
             tmp = df.copy()
             tmp["activity_type"] = atype

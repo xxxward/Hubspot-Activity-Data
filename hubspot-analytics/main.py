@@ -1,5 +1,9 @@
 """
 Main orchestrator: load -> normalize -> owner map -> dedup -> filter -> metrics.
+
+Gong data now comes from Google Sheets (synced via Apps Script), not the Gong API.
+Tasks are excluded from activity metrics.
+Calls stay as calls; meetings stay as meetings (no cross-conversion).
 """
 
 import logging
@@ -12,7 +16,6 @@ from src.sheets.sheets_client import read_all_tabs
 from src.parsing.normalize import (
     normalize_dataframe, build_uid_map_from_meetings,
     apply_owner_mapping, deduplicate_meetings, deduplicate_emails,
-    convert_calls_to_meetings_and_dedupe,
 )
 from src.parsing.filters import apply_deal_filters, apply_activity_filters
 from src.metrics.activity import count_activities, build_combined_activity_log
@@ -22,18 +25,6 @@ from src.metrics.scoring import compute_activity_score, compute_activity_score_b
 
 logger = logging.getLogger(__name__)
 
-try:
-    from src.gong.gong_client import (
-        fetch_gong_enrichment, fetch_gong_enrichment_range,
-        map_gong_to_rep, is_gong_configured,
-    )
-except ImportError:
-    logger.warning("Gong client not available — skipping Gong integration.")
-    def fetch_gong_enrichment(*a, **kw): return pd.DataFrame()
-    def fetch_gong_enrichment_range(*a, **kw): return pd.DataFrame()
-    def map_gong_to_rep(name): return name
-    def is_gong_configured(): return False
-
 
 @dataclass
 class AnalyticsData:
@@ -41,15 +32,16 @@ class AnalyticsData:
     # Filtered base tables
     deals: pd.DataFrame = field(default_factory=pd.DataFrame)
     meetings: pd.DataFrame = field(default_factory=pd.DataFrame)
-    tasks: pd.DataFrame = field(default_factory=pd.DataFrame)
     tickets: pd.DataFrame = field(default_factory=pd.DataFrame)
     calls: pd.DataFrame = field(default_factory=pd.DataFrame)
     emails: pd.DataFrame = field(default_factory=pd.DataFrame)
     notes: pd.DataFrame = field(default_factory=pd.DataFrame)
     new_pipeline: pd.DataFrame = field(default_factory=pd.DataFrame)
 
-    # Gong call intelligence
+    # Gong data from Google Sheets (synced via Apps Script)
+    gong_ai_summaries: pd.DataFrame = field(default_factory=pd.DataFrame)
     gong_calls: pd.DataFrame = field(default_factory=pd.DataFrame)
+    gong_users: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     # Activity counts
     activity_counts_daily: pd.DataFrame = field(default_factory=pd.DataFrame)
@@ -75,14 +67,46 @@ class AnalyticsData:
     avg_sales_cycle: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
+def _normalize_gong_sheet(df: pd.DataFrame, sheet_type: str) -> pd.DataFrame:
+    """Light normalization for Gong sheet tabs (snake_case headers, type coercion)."""
+    if df.empty:
+        return df
+
+    # Snake-case column names
+    df.columns = (
+        df.columns.str.strip()
+        .str.lower()
+        .str.replace(r"[^a-z0-9]+", "_", regex=True)
+        .str.strip("_")
+    )
+
+    # Coerce numeric columns
+    if sheet_type == "gong_ai_summaries":
+        if "duration_sec" in df.columns:
+            df["duration_sec"] = pd.to_numeric(df["duration_sec"], errors="coerce")
+        if "date" in df.columns:
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    elif sheet_type == "gong_calls":
+        if "duration_sec" in df.columns:
+            df["duration_sec"] = pd.to_numeric(df["duration_sec"], errors="coerce")
+        for col in ("scheduled", "started"):
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors="coerce")
+    elif sheet_type == "gong_users":
+        if "created" in df.columns:
+            df["created"] = pd.to_datetime(df["created"], errors="coerce")
+
+    return df
+
+
 def load_all() -> AnalyticsData:
     """
     Full pipeline:
-      1. Read tabs from Google Sheets
+      1. Read tabs from Google Sheets (including Gong tabs)
       2. Normalize columns & types
       3. Build UID->Name map from Meetings
       4. Apply owner mapping per tab
-      5. Deduplicate meetings
+      5. Deduplicate meetings and emails
       6. Filter by rep/pipeline/stage
       7. Compute all metrics
     """
@@ -90,39 +114,48 @@ def load_all() -> AnalyticsData:
     logger.info("Reading Google Sheets...")
     raw = read_all_tabs()
 
-    # 2 - Normalize columns & types
+    # 2 - Normalize HubSpot columns & types
     logger.info("Normalizing...")
-    norm = {k: normalize_dataframe(v) for k, v in raw.items()}
+    norm = {}
+    hubspot_tabs = ("deals", "meetings", "calls", "tickets", "emails", "notes", "new_pipeline")
+    for k, v in raw.items():
+        if k in hubspot_tabs:
+            norm[k] = normalize_dataframe(v)
+        else:
+            norm[k] = v  # Gong tabs get separate normalization
+
+    # Normalize Gong sheet tabs
+    gong_ai_summaries = _normalize_gong_sheet(
+        norm.pop("gong_ai_summaries", pd.DataFrame()), "gong_ai_summaries"
+    )
+    gong_calls_sheet = _normalize_gong_sheet(
+        norm.pop("gong_calls", pd.DataFrame()), "gong_calls"
+    )
+    gong_users = _normalize_gong_sheet(
+        norm.pop("gong_users", pd.DataFrame()), "gong_users"
+    )
+
+    logger.info(
+        "Gong sheets: %d AI summaries, %d calls, %d users.",
+        len(gong_ai_summaries), len(gong_calls_sheet), len(gong_users),
+    )
 
     # 3 - Build UID map from meetings (the Rosetta Stone)
     logger.info("Building HubSpot UID -> Name mapping...")
     uid_map = build_uid_map_from_meetings(norm.get("meetings", pd.DataFrame()))
 
-    # 4 - Apply owner mapping per tab type
+    # 4 - Apply owner mapping per tab type (skip tasks — not tracked)
     logger.info("Applying owner mappings...")
-    for tab_type in ("deals", "meetings", "calls", "tasks", "tickets", "emails", "notes", "new_pipeline"):
+    for tab_type in ("deals", "meetings", "calls", "tickets", "emails", "notes", "new_pipeline"):
         if tab_type in norm and not norm[tab_type].empty:
             norm[tab_type] = apply_owner_mapping(norm[tab_type], uid_map, tab_type)
 
-    # 5 - Deduplicate meetings
+    # 5 - Deduplicate meetings (but do NOT convert calls to meetings)
     logger.info("Deduplicating meetings...")
     if not norm.get("meetings", pd.DataFrame()).empty:
         norm["meetings"] = deduplicate_meetings(norm["meetings"])
 
-    # 5b - Convert negotiation meeting calls to meetings and cross-deduplicate
-    logger.info("Converting negotiation meeting calls and cross-deduplicating...")
-    if not norm.get("calls", pd.DataFrame()).empty or not norm.get("meetings", pd.DataFrame()).empty:
-        norm["calls"], norm["meetings"] = convert_calls_to_meetings_and_dedupe(
-            norm.get("calls", pd.DataFrame()),
-            norm.get("meetings", pd.DataFrame())
-        )
-        
-    # 5c - Deduplicate meetings AGAIN after call conversion
-    logger.info("Re-deduplicating meetings after call conversion...")
-    if not norm.get("meetings", pd.DataFrame()).empty:
-        norm["meetings"] = deduplicate_meetings(norm["meetings"])
-
-    # 5d - Deduplicate emails
+    # 5b - Deduplicate emails
     logger.info("Deduplicating emails...")
     if not norm.get("emails", pd.DataFrame()).empty:
         norm["emails"] = deduplicate_emails(norm["emails"])
@@ -131,38 +164,16 @@ def load_all() -> AnalyticsData:
     logger.info("Filtering...")
     deals = apply_deal_filters(norm.get("deals", pd.DataFrame()))
     meetings = apply_activity_filters(norm.get("meetings", pd.DataFrame()))
-    tasks = apply_activity_filters(norm.get("tasks", pd.DataFrame()))
     calls = apply_activity_filters(norm.get("calls", pd.DataFrame()))
     emails = apply_activity_filters(norm.get("emails", pd.DataFrame()))
     notes = apply_activity_filters(norm.get("notes", pd.DataFrame()))
     tickets = norm.get("tickets", pd.DataFrame())
     new_pipeline = apply_activity_filters(norm.get("new_pipeline", pd.DataFrame()))
 
-    # 6b - Gong call intelligence (optional) — fetch last 7 days for dashboard
-    gong_calls = pd.DataFrame()
-    if is_gong_configured():
-        logger.info("Fetching Gong call data (last 7 days)...")
-        try:
-            from datetime import datetime, timedelta
-            from zoneinfo import ZoneInfo
-            _tz = ZoneInfo("America/Denver")
-            _now = datetime.now(_tz)
-            _from = (_now - timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
-            _to = _now.replace(hour=23, minute=59, second=59, microsecond=0)
-            gong_calls = fetch_gong_enrichment_range(_from, _to)
-            if not gong_calls.empty:
-                gong_calls["hubspot_owner_name"] = gong_calls["gong_user_name"].apply(map_gong_to_rep)
-                logger.info("Gong: %d calls loaded.", len(gong_calls))
-        except Exception as e:
-            logger.warning("Gong fetch failed (continuing without): %s", e)
-            gong_calls = pd.DataFrame()
-    else:
-        logger.info("Gong not configured — skipping.")
-
-    # 7 - Metrics
+    # 7 - Metrics (no tasks)
     logger.info("Computing activity metrics...")
-    activity = count_activities(calls, meetings, tasks, emails)
-    activity_log = build_combined_activity_log(calls, meetings, tasks)
+    activity = count_activities(calls, meetings, emails=emails)
+    activity_log = build_combined_activity_log(calls, meetings, emails=emails)
 
     weekly = activity.get("activity_counts_weekly", pd.DataFrame())
     rep_score = compute_activity_score(weekly.copy())
@@ -175,8 +186,16 @@ def load_all() -> AnalyticsData:
     term = terminal_summary(deals)
 
     data = AnalyticsData(
-        deals=deals, meetings=meetings, tasks=tasks, tickets=tickets, calls=calls, emails=emails, notes=notes, new_pipeline=new_pipeline,
-        gong_calls=gong_calls,
+        deals=deals,
+        meetings=meetings,
+        tickets=tickets,
+        calls=calls,
+        emails=emails,
+        notes=notes,
+        new_pipeline=new_pipeline,
+        gong_ai_summaries=gong_ai_summaries,
+        gong_calls=gong_calls_sheet,
+        gong_users=gong_users,
         activity_counts_daily=activity.get("activity_counts_daily", pd.DataFrame()),
         activity_counts_weekly=weekly,
         activity_counts_monthly=activity.get("activity_counts_monthly", pd.DataFrame()),
