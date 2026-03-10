@@ -28,7 +28,9 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.utils.logging import setup_logging
-from src.sheets.sheets_client_standalone import read_all_tabs_standalone
+from src.sheets.sheets_client_standalone import (
+    read_all_tabs_standalone, write_snapshot, read_snapshot,
+)
 from src.parsing.normalize import (
     normalize_dataframe, build_uid_map_from_meetings,
     apply_owner_mapping, deduplicate_meetings, deduplicate_emails,
@@ -540,6 +542,15 @@ def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp) -> 
                         context += f"    {brief}\n"
                 context += "\n"
 
+    # Active deal summary for snapshot
+    active_deal_count = 0
+    total_pipeline_value = 0
+    if not rep_deals.empty and "is_terminal" in rep_deals.columns:
+        active = rep_deals[~rep_deals["is_terminal"]]
+        active_deal_count = len(active)
+        if "amount" in active.columns:
+            total_pipeline_value = float(pd.to_numeric(active["amount"], errors="coerce").sum())
+
     return {
         "context": context,
         "today_total": today_total,
@@ -553,7 +564,74 @@ def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp) -> 
         "week_total": week_total,
         "companies_touched": len(today_companies),
         "meeting_details": meeting_details,
+        "active_deals": active_deal_count,
+        "total_pipeline_value": total_pipeline_value,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# DAILY SNAPSHOTS — save/load for day-over-day deltas
+# ═══════════════════════════════════════════════════════════════════════
+
+def build_snapshot_rows(all_rep_data: dict[str, dict], date_str: str) -> list[list[str]]:
+    """Build rows for the Daily Snapshots tab from today's rep data."""
+    rows = []
+    for rep_name, rd in all_rep_data.items():
+        role = REP_ROLES.get(rep_name, "acquisition")
+        rows.append([
+            date_str,
+            rep_name,
+            role,
+            str(rd["today_meetings"]),
+            str(rd["today_calls"]),
+            str(rd["today_emails"]),
+            str(rd["today_estimates"]),
+            str(rd["today_samples"]),
+            str(rd["today_notes"]),
+            str(rd["today_total"]),
+            str(rd["companies_touched"]),
+            str(rd.get("active_deals", 0)),
+            str(round(rd.get("total_pipeline_value", 0), 2)),
+        ])
+    return rows
+
+
+def _delta_str(current: int, previous: int) -> str:
+    """Format a delta like '+3' or '-1' or '—' if no change."""
+    diff = current - previous
+    if diff > 0:
+        return f"+{diff}"
+    elif diff < 0:
+        return str(diff)
+    return "—"
+
+
+def build_delta_context(rep_name: str, rep_data: dict, prev_snapshot: dict | None) -> str:
+    """Build a day-over-day comparison string for the AI context."""
+    if prev_snapshot is None:
+        return ""
+
+    prev = {
+        "meetings": int(prev_snapshot.get("meetings", 0)),
+        "calls": int(prev_snapshot.get("calls", 0)),
+        "emails": int(prev_snapshot.get("emails", 0)),
+        "estimates": int(prev_snapshot.get("estimates", 0)),
+        "sample_kits": int(prev_snapshot.get("sample_kits", 0)),
+        "notes": int(prev_snapshot.get("notes", 0)),
+        "total": int(prev_snapshot.get("total", 0)),
+        "companies_touched": int(prev_snapshot.get("companies_touched", 0)),
+    }
+
+    ctx = "DAY-OVER-DAY COMPARISON (vs yesterday):\n"
+    ctx += f"  Meetings: {rep_data['today_meetings']} ({_delta_str(rep_data['today_meetings'], prev['meetings'])})\n"
+    ctx += f"  Calls: {rep_data['today_calls']} ({_delta_str(rep_data['today_calls'], prev['calls'])})\n"
+    ctx += f"  Emails: {rep_data['today_emails']} ({_delta_str(rep_data['today_emails'], prev['emails'])})\n"
+    ctx += f"  Estimates: {rep_data['today_estimates']} ({_delta_str(rep_data['today_estimates'], prev['estimates'])})\n"
+    ctx += f"  Sample Kits: {rep_data['today_samples']} ({_delta_str(rep_data['today_samples'], prev['sample_kits'])})\n"
+    ctx += f"  Notes: {rep_data['today_notes']} ({_delta_str(rep_data['today_notes'], prev['notes'])})\n"
+    ctx += f"  Total: {rep_data['today_total']} ({_delta_str(rep_data['today_total'], prev['total'])})\n"
+    ctx += f"  Companies: {rep_data['companies_touched']} ({_delta_str(rep_data['companies_touched'], prev['companies_touched'])})\n\n"
+    return ctx
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -590,7 +668,12 @@ RULES:
 # TEAM SUMMARY (manager view)
 # ═══════════════════════════════════════════════════════════════════════
 
-def generate_team_summary(client: anthropic.Anthropic, all_rep_data: dict[str, dict], today_str: str) -> str:
+def generate_team_summary(
+    client: anthropic.Anthropic,
+    all_rep_data: dict[str, dict],
+    today_str: str,
+    prev_by_rep: dict[str, dict] | None = None,
+) -> str:
     """Generate a brief team-level summary for managers."""
     team_context = f"TEAM DAILY SUMMARY — {today_str}\n\n"
     for rep_name, rep_data in all_rep_data.items():
@@ -600,10 +683,26 @@ def generate_team_summary(client: anthropic.Anthropic, all_rep_data: dict[str, d
         team_context += f"{rep_data['today_emails']} emails, "
         team_context += f"{rep_data['today_estimates']} estimates, {rep_data['today_samples']} sample kits, "
         team_context += f"{rep_data['today_notes']} notes "
-        team_context += f"({rep_data['today_total']} total)\n"
+        team_context += f"({rep_data['today_total']} total)"
+
+        # Add delta vs yesterday
+        prev = prev_by_rep.get(rep_name) if prev_by_rep else None
+        if prev:
+            prev_total = int(prev.get("total", 0))
+            delta = rep_data["today_total"] - prev_total
+            if delta > 0:
+                team_context += f"  [+{delta} vs yesterday]"
+            elif delta < 0:
+                team_context += f"  [{delta} vs yesterday]"
+        team_context += "\n"
 
     total_team = sum(d["today_total"] for d in all_rep_data.values())
-    team_context += f"\nTEAM TOTAL: {total_team} touchpoints\n"
+    prev_team_total = sum(int(v.get("total", 0)) for v in (prev_by_rep or {}).values())
+    team_context += f"\nTEAM TOTAL: {total_team} touchpoints"
+    if prev_by_rep:
+        team_delta = total_team - prev_team_total
+        team_context += f" ({'+' if team_delta >= 0 else ''}{team_delta} vs yesterday)"
+    team_context += "\n"
 
     resp = client.messages.create(
         model="claude-haiku-4-5-20251001",
@@ -614,6 +713,7 @@ RULES:
 - PAY ATTENTION TO THE DATE. Match your language to the actual day of the week — don't say "great close to the week" on a Monday or Wednesday.
 - 2-3 sentences max. Highlight the team's wins and momentum.
 - Call out standout performers by name.
+- If day-over-day deltas are provided, note significant changes (big increases or drops).
 - Keep it positive and forward-looking.
 - No markdown formatting — plain conversational text.
 - This goes to managers — keep it high-level.""",
@@ -626,8 +726,20 @@ RULES:
 # EMAIL BUILDING
 # ═══════════════════════════════════════════════════════════════════════
 
-def build_email_html(rep_name: str, rep_data: dict, ai_text: str, today_str: str) -> str:
+def build_email_html(
+    rep_name: str,
+    rep_data: dict,
+    ai_text: str,
+    today_str: str,
+    prev_snapshot: dict | None = None,
+) -> str:
     """Build the HTML email for one rep's daily summary."""
+    # Map stat labels to previous snapshot keys
+    stat_prev_keys = {
+        "Meetings": "meetings", "Calls": "calls", "Emails": "emails",
+        "Estimates": "estimates", "Samples": "sample_kits", "Notes": "notes",
+    }
+
     # Activity stat cards
     stats = [
         ("Meetings", rep_data["today_meetings"], "#f472b6"),
@@ -640,10 +752,19 @@ def build_email_html(rep_name: str, rep_data: dict, ai_text: str, today_str: str
 
     stat_cards = ""
     for label, count, color in stats:
+        delta_html = ""
+        if prev_snapshot:
+            prev_val = int(prev_snapshot.get(stat_prev_keys.get(label, ""), 0))
+            diff = count - prev_val
+            if diff > 0:
+                delta_html = f'<div style="font-size:10px;color:#34d399;margin-top:2px;">↑{diff} vs yesterday</div>'
+            elif diff < 0:
+                delta_html = f'<div style="font-size:10px;color:#fb7185;margin-top:2px;">↓{abs(diff)} vs yesterday</div>'
         stat_cards += f"""
         <td style="text-align:center; padding:12px 8px;">
             <div style="font-size:28px; font-weight:800; color:{color}; line-height:1;">{count}</div>
             <div style="font-size:11px; color:#9b93b7; text-transform:uppercase; letter-spacing:1px; margin-top:4px;">{label}</div>
+            {delta_html}
         </td>"""
 
     # AI summary paragraphs
@@ -704,23 +825,42 @@ def build_email_html(rep_name: str, rep_data: dict, ai_text: str, today_str: str
 </html>"""
 
 
-def build_manager_email_html(team_summary: str, all_rep_data: dict[str, dict], today_str: str) -> str:
+def build_manager_email_html(
+    team_summary: str,
+    all_rep_data: dict[str, dict],
+    today_str: str,
+    prev_by_rep: dict[str, dict] | None = None,
+) -> str:
     """Build the HTML email for the manager team summary."""
+
+    def _delta_badge(current: int, prev_key: str, prev: dict | None) -> str:
+        """Small inline delta badge like ↑2 or ↓1."""
+        if prev is None:
+            return ""
+        prev_val = int(prev.get(prev_key, 0))
+        diff = current - prev_val
+        if diff > 0:
+            return f'<span style="font-size:9px;color:#34d399;margin-left:2px;">↑{diff}</span>'
+        elif diff < 0:
+            return f'<span style="font-size:9px;color:#fb7185;margin-left:2px;">↓{abs(diff)}</span>'
+        return ""
+
     # Rep rows
     rep_rows = ""
     for rep_name, rd in all_rep_data.items():
         role = ROLE_LABELS.get(REP_ROLES.get(rep_name, "acquisition"), "Sales")
         total_color = "#34d399" if rd["today_total"] >= 5 else ("#fbbf24" if rd["today_total"] >= 2 else "#6a6283")
+        prev = prev_by_rep.get(rep_name) if prev_by_rep else None
         rep_rows += f"""
         <tr style="border-bottom:1px solid #2d2750;">
             <td style="padding:10px 12px; color:#ede9fc; font-weight:600; font-size:14px;">{rep_name}<br><span style="font-size:11px; color:#6a6283; font-weight:400;">{role}</span></td>
-            <td style="padding:10px 8px; text-align:center; color:#f472b6; font-weight:600;">{rd['today_meetings']}</td>
-            <td style="padding:10px 8px; text-align:center; color:#818cf8; font-weight:600;">{rd['today_calls']}</td>
-            <td style="padding:10px 8px; text-align:center; color:#c084fc; font-weight:600;">{rd['today_emails']}</td>
-            <td style="padding:10px 8px; text-align:center; color:#34d399; font-weight:600;">{rd['today_estimates']}</td>
-            <td style="padding:10px 8px; text-align:center; color:#67e8f9; font-weight:600;">{rd['today_samples']}</td>
-            <td style="padding:10px 8px; text-align:center; color:#fb923c; font-weight:600;">{rd['today_notes']}</td>
-            <td style="padding:10px 8px; text-align:center; color:{total_color}; font-weight:700; font-size:16px;">{rd['today_total']}</td>
+            <td style="padding:10px 8px; text-align:center; color:#f472b6; font-weight:600;">{rd['today_meetings']}{_delta_badge(rd['today_meetings'], 'meetings', prev)}</td>
+            <td style="padding:10px 8px; text-align:center; color:#818cf8; font-weight:600;">{rd['today_calls']}{_delta_badge(rd['today_calls'], 'calls', prev)}</td>
+            <td style="padding:10px 8px; text-align:center; color:#c084fc; font-weight:600;">{rd['today_emails']}{_delta_badge(rd['today_emails'], 'emails', prev)}</td>
+            <td style="padding:10px 8px; text-align:center; color:#34d399; font-weight:600;">{rd['today_estimates']}{_delta_badge(rd['today_estimates'], 'estimates', prev)}</td>
+            <td style="padding:10px 8px; text-align:center; color:#67e8f9; font-weight:600;">{rd['today_samples']}{_delta_badge(rd['today_samples'], 'sample_kits', prev)}</td>
+            <td style="padding:10px 8px; text-align:center; color:#fb923c; font-weight:600;">{rd['today_notes']}{_delta_badge(rd['today_notes'], 'notes', prev)}</td>
+            <td style="padding:10px 8px; text-align:center; color:{total_color}; font-weight:700; font-size:16px;">{rd['today_total']}{_delta_badge(rd['today_total'], 'total', prev)}</td>
         </tr>"""
 
     team_total = sum(d["today_total"] for d in all_rep_data.values())
@@ -829,7 +969,12 @@ def main():
     parser.add_argument(
         "--test",
         metavar="REP_NAME",
-        help="Test mode: generate report for one rep and send only to xward@calyxcontainers.com (no CC, no manager email)",
+        help="Test mode: generate report for one rep and send only to xward@calyxcontainers.com",
+    )
+    parser.add_argument(
+        "--test-all",
+        action="store_true",
+        help="Preview mode: generate ALL reports (every rep + manager summary) and send them all to xward@calyxcontainers.com",
     )
     args = parser.parse_args()
 
@@ -842,7 +987,7 @@ def main():
     # Mountain Time hour is outside the 4-8 PM window (target is 4:30 PM).
     # Note: GitHub Actions cron can be delayed 1-3 hours, so the window
     # must be wide enough to accommodate late runs.
-    if args.test is None and not (16 <= now_mst.hour <= 20):
+    if args.test is None and not args.test_all and not (16 <= now_mst.hour <= 20):
         logger.info(
             "Current Mountain Time is %s — outside 4-8 PM window, skipping.",
             now_mst.strftime("%I:%M %p %Z"),
@@ -854,9 +999,12 @@ def main():
     today_str = today.strftime("%A, %B %d, %Y")
 
     test_mode = args.test is not None
+    test_all = args.test_all
     test_rep = args.test
 
-    if test_mode:
+    if test_all:
+        logger.info("=== PREVIEW MODE: All reports → xward@calyxcontainers.com ===")
+    elif test_mode:
         logger.info("=== TEST MODE: Report for %s → xward@calyxcontainers.com ===", test_rep)
     logger.info("=== Daily Report for %s (MST) ===", today_str)
 
@@ -864,18 +1012,46 @@ def main():
     logger.info("Loading HubSpot data...")
     datasets = load_data()
 
-    # 2. Build context for each rep (skip CEO — Alex)
+    # 2. Load yesterday's snapshot for day-over-day deltas
+    yesterday = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+    prev_snapshots_raw = read_snapshot(yesterday)
+    prev_by_rep: dict[str, dict] = {}
+    if prev_snapshots_raw:
+        for row in prev_snapshots_raw:
+            prev_by_rep[row.get("rep", "")] = row
+        logger.info("Loaded previous snapshot for %s (%d reps).", yesterday, len(prev_by_rep))
+    else:
+        logger.info("No previous snapshot found for %s — skipping deltas.", yesterday)
+
+    # 3. Build context for each rep (skip CEO — Alex)
     if test_mode:
         reps_to_report = [test_rep]
     else:
         reps_to_report = [r for r in REPS_IN_SCOPE if r in REP_EMAILS]
+    preview_to = "xward@calyxcontainers.com"
     all_rep_data: dict[str, dict] = {}
 
     for rep in reps_to_report:
         logger.info("Building context for %s...", rep)
-        all_rep_data[rep] = build_rep_context(datasets, rep, today_ts)
+        rep_data = build_rep_context(datasets, rep, today_ts)
 
-    # 3. Generate AI encouragement for each rep
+        # Inject day-over-day delta into AI context
+        delta_ctx = build_delta_context(rep, rep_data, prev_by_rep.get(rep))
+        if delta_ctx:
+            rep_data["context"] += delta_ctx
+
+        all_rep_data[rep] = rep_data
+
+    # 4. Save today's snapshot (skip in single-rep test mode)
+    today_date_str = today.strftime("%Y-%m-%d")
+    if not test_mode:
+        snapshot_rows = build_snapshot_rows(all_rep_data, today_date_str)
+        try:
+            write_snapshot(snapshot_rows, today_date_str)
+        except Exception as e:
+            logger.warning("Failed to save snapshot: %s", e)
+
+    # 5. Generate AI encouragement for each rep
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         logger.error("ANTHROPIC_API_KEY not set — cannot generate AI summaries.")
@@ -890,29 +1066,34 @@ def main():
             client, rep, all_rep_data[rep]["context"]
         )
 
-    # 4. Generate team summary for managers (skip in test mode)
-    if not test_mode:
+    # 6. Generate team summary for managers (skip in single-rep test mode)
+    if not test_mode or test_all:
         logger.info("Generating team summary...")
-        team_summary = generate_team_summary(client, all_rep_data, today_str)
+        team_summary = generate_team_summary(client, all_rep_data, today_str, prev_by_rep)
 
-    # 5. Send individual rep emails (no CC to management)
+    # 7. Send individual rep emails (no CC to management)
     for rep in reps_to_report:
         subject = f"Your Daily Wins — {today.strftime('%A, %b %d')}"
-        if test_mode:
+        if test_mode or test_all:
             subject = f"[TEST] {subject}"
-        html = build_email_html(rep, all_rep_data[rep], rep_summaries[rep], today_str)
+        html = build_email_html(rep, all_rep_data[rep], rep_summaries[rep], today_str, prev_by_rep.get(rep))
 
-        if test_mode:
-            send_email(to="xward@calyxcontainers.com", subject=subject, html_body=html)
+        if test_mode or test_all:
+            send_email(to=preview_to, subject=subject, html_body=html)
         else:
             send_email(to=REP_EMAILS[rep], subject=subject, html_body=html)
 
-    # 6. Send executive summary to managers (Alex + Kyle)
-    if not test_mode:
+    # 8. Send executive summary to managers (Alex + Kyle)
+    if not test_mode or test_all:
         manager_subject = f"Team Daily Wins — {today.strftime('%A, %b %d')}"
-        manager_html = build_manager_email_html(team_summary, all_rep_data, today_str)
-        for manager_email in MANAGER_EMAILS:
-            send_email(to=manager_email, subject=manager_subject, html_body=manager_html)
+        if test_all:
+            manager_subject = f"[TEST] {manager_subject}"
+        manager_html = build_manager_email_html(team_summary, all_rep_data, today_str, prev_by_rep)
+        if test_all:
+            send_email(to=preview_to, subject=manager_subject, html_body=manager_html)
+        else:
+            for manager_email in MANAGER_EMAILS:
+                send_email(to=manager_email, subject=manager_subject, html_body=manager_html)
 
     logger.info("=== Daily Report Complete ===")
 

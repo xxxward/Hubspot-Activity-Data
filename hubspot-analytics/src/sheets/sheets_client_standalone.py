@@ -15,8 +15,8 @@ from google.oauth2.service_account import Credentials
 logger = logging.getLogger(__name__)
 
 SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets.readonly",
-    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
 ]
 
 DEFAULT_TABS: dict[str, str] = {
@@ -91,16 +91,86 @@ def _read_tab(spreadsheet: gspread.Spreadsheet, tab_name: str) -> pd.DataFrame:
     return df
 
 
-def read_all_tabs_standalone() -> dict[str, pd.DataFrame]:
-    """Read every configured tab without Streamlit."""
+def _get_spreadsheet() -> gspread.Spreadsheet:
+    """Authenticate and open the configured spreadsheet."""
     client = _build_client()
     sid = os.environ.get("SPREADSHEET_ID", "")
     if not sid:
         raise EnvironmentError("SPREADSHEET_ID environment variable not set.")
     spreadsheet = client.open_by_key(sid)
     logger.info("Opened spreadsheet: %s", spreadsheet.title)
+    return spreadsheet
+
+
+def read_all_tabs_standalone() -> dict[str, pd.DataFrame]:
+    """Read every configured tab without Streamlit."""
+    spreadsheet = _get_spreadsheet()
 
     data: dict[str, pd.DataFrame] = {}
     for key, tab_name in DEFAULT_TABS.items():
         data[key] = _read_tab(spreadsheet, tab_name)
     return data
+
+
+SNAPSHOT_TAB = "Daily Snapshots"
+
+
+def write_snapshot(rows: list[list[str]], date_str: str) -> None:
+    """Append daily snapshot rows to the 'Daily Snapshots' tab.
+
+    Creates the tab with headers if it doesn't exist.  Appends new rows
+    for today (clears any existing rows for the same date first).
+    """
+    spreadsheet = _get_spreadsheet()
+
+    headers = [
+        "date", "rep", "role", "meetings", "calls", "emails",
+        "estimates", "sample_kits", "notes", "total",
+        "companies_touched", "active_deals", "total_pipeline_value",
+    ]
+
+    try:
+        ws = spreadsheet.worksheet(SNAPSHOT_TAB)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet(title=SNAPSHOT_TAB, rows=200, cols=len(headers))
+        ws.append_row(headers, value_input_option="RAW")
+        logger.info("Created '%s' tab with headers.", SNAPSHOT_TAB)
+
+    # Remove any existing rows for this date (re-run safety)
+    all_vals = ws.get_all_values()
+    if len(all_vals) > 1:
+        rows_to_delete = []
+        for i, row in enumerate(all_vals[1:], start=2):  # 1-indexed, skip header
+            if row and row[0] == date_str:
+                rows_to_delete.append(i)
+        # Delete in reverse to preserve indices
+        for row_idx in reversed(rows_to_delete):
+            ws.delete_rows(row_idx)
+
+    # Append new snapshot rows
+    for row in rows:
+        ws.append_row(row, value_input_option="RAW")
+
+    logger.info("Saved %d snapshot rows for %s.", len(rows), date_str)
+
+
+def read_snapshot(date_str: str) -> list[dict] | None:
+    """Read snapshot rows for a specific date. Returns None if tab/date not found."""
+    try:
+        spreadsheet = _get_spreadsheet()
+        ws = spreadsheet.worksheet(SNAPSHOT_TAB)
+    except (gspread.exceptions.WorksheetNotFound, Exception) as e:
+        logger.info("No snapshot tab found: %s", e)
+        return None
+
+    all_vals = ws.get_all_values()
+    if len(all_vals) < 2:
+        return None
+
+    headers = all_vals[0]
+    rows = []
+    for row in all_vals[1:]:
+        if row and row[0] == date_str:
+            rows.append(dict(zip(headers, row)))
+
+    return rows if rows else None
