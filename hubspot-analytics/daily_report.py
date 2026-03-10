@@ -77,42 +77,47 @@ REP_KPIS: dict[str, dict] = {
     "Owen Labombard": {
         "role_desc": "SDR — pipeline generation, volume is king",
         "calls": 25,
-        "emails": 50,
-        "meetings": 2,
-        "notes": 3,
-        "estimates_samples": 0,  # weekly target 3, tracked weekly not daily
+        "emails": 30,
+        "meetings": 1,
+        "notes": 0,
+        "estimates": 1,
+        "samples": 1,
     },
     "Lance Mitton": {
         "role_desc": "Acquisition — converting new business, needs prospecting + meetings",
         "calls": 8,
-        "emails": 25,
-        "meetings": 3,
-        "notes": 2,
-        "estimates_samples": 0,  # weekly target 5
+        "emails": 8,
+        "meetings": 1,
+        "notes": 0,
+        "estimates": 2,
+        "samples": 1,
     },
     "Brad Sherman": {
         "role_desc": "Acquisition — mirrors Lance, dials more but converts less",
-        "calls": 10,
-        "emails": 25,
-        "meetings": 2,
-        "notes": 2,
-        "estimates_samples": 0,  # weekly target 5
+        "calls": 8,
+        "emails": 8,
+        "meetings": 1,
+        "notes": 0,
+        "estimates": 2,
+        "samples": 1,
     },
     "Jake Lynch": {
         "role_desc": "Senior AM — protecting and growing biggest accounts ($16.6K avg deal)",
-        "calls": 5,
-        "emails": 20,
-        "meetings": 2,
-        "notes": 2,
-        "estimates_samples": 0,  # weekly target 3
+        "calls": 4,
+        "emails": 8,
+        "meetings": 1,
+        "notes": 0,
+        "estimates": 5,
+        "samples": 1,
     },
     "Dave Borkowski": {
         "role_desc": "AM — managing 38 deals, needs higher activity for volume",
-        "calls": 5,
-        "emails": 20,
-        "meetings": 2,
-        "notes": 2,
-        "estimates_samples": 0,  # weekly target 4
+        "calls": 4,
+        "emails": 6,
+        "meetings": 1,
+        "notes": 0,
+        "estimates": 5,
+        "samples": 1,
     },
 }
 
@@ -551,6 +556,8 @@ def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp) -> 
             ("Calls", len(today_calls), kpis["calls"]),
             ("Emails", len(today_emails), kpis["emails"]),
             ("Meetings", len(today_meetings), kpis["meetings"]),
+            ("Estimates", len(today_estimates), kpis["estimates"]),
+            ("Sample Kits", len(today_samples), kpis["samples"]),
             ("Notes", len(today_notes), kpis["notes"]),
         ]
         for metric_name, actual, target in kpi_metrics:
@@ -559,10 +566,6 @@ def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp) -> 
             pct = round(actual / target * 100) if target else 0
             status = "HIT" if actual >= target else "MISS"
             context += f"  {metric_name}: {actual}/{target} ({pct}%) — {status}\n"
-        # Estimates/samples as weekly context
-        est_samp_total = len(today_estimates) + len(today_samples)
-        if est_samp_total > 0:
-            context += f"  Estimates/Samples today: {est_samp_total}\n"
         context += "\n"
 
     if meeting_details:
@@ -788,6 +791,8 @@ def generate_team_summary(
                 ("Calls", rep_data["today_calls"], kpis["calls"]),
                 ("Emails", rep_data["today_emails"], kpis["emails"]),
                 ("Meetings", rep_data["today_meetings"], kpis["meetings"]),
+                ("Estimates", rep_data["today_estimates"], kpis["estimates"]),
+                ("Samples", rep_data["today_samples"], kpis["samples"]),
                 ("Notes", rep_data["today_notes"], kpis["notes"]),
             ]
             hits = [m for m, a, t in kpi_items if t > 0 and a >= t]
