@@ -164,6 +164,9 @@ def load_all() -> AnalyticsData:
     logger.info("Filtering...")
     deals = apply_deal_filters(norm.get("deals", pd.DataFrame()))
     meetings = apply_activity_filters(norm.get("meetings", pd.DataFrame()))
+    # Only completed meetings count as activity (exclude Scheduled, Canceled, No Show, etc.)
+    if not meetings.empty and "meeting_outcome" in meetings.columns:
+        meetings = meetings[meetings["meeting_outcome"].str.strip().str.lower() == "completed"]
     calls = apply_activity_filters(norm.get("calls", pd.DataFrame()))
     emails = apply_activity_filters(norm.get("emails", pd.DataFrame()))
     notes = apply_activity_filters(norm.get("notes", pd.DataFrame()))

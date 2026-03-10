@@ -70,6 +70,13 @@ ROLE_LABELS: dict[str, str] = {
 # DATA LOADING (reuse full pipeline, no Streamlit)
 # ═══════════════════════════════════════════════════════════════════════
 
+def _filter_completed_meetings(df: pd.DataFrame) -> pd.DataFrame:
+    """Only keep meetings with outcome 'Completed' — Scheduled meetings are not actual activity."""
+    if df.empty or "meeting_outcome" not in df.columns:
+        return df
+    return df[df["meeting_outcome"].str.strip().str.lower() == "completed"]
+
+
 def load_data():
     """Run the full data pipeline (same as main.py but with standalone sheets client)."""
     logger.info("Reading Google Sheets (standalone)...")
@@ -101,7 +108,7 @@ def load_data():
     logger.info("Filtering...")
     return {
         "deals": apply_deal_filters(norm.get("deals", pd.DataFrame())),
-        "meetings": apply_activity_filters(norm.get("meetings", pd.DataFrame())),
+        "meetings": _filter_completed_meetings(apply_activity_filters(norm.get("meetings", pd.DataFrame()))),
         "calls": apply_activity_filters(norm.get("calls", pd.DataFrame())),
         "emails": apply_activity_filters(norm.get("emails", pd.DataFrame())),
         "notes": apply_activity_filters(norm.get("notes", pd.DataFrame())),
