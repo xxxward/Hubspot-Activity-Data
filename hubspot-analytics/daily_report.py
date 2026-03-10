@@ -1042,9 +1042,9 @@ def main():
 
         all_rep_data[rep] = rep_data
 
-    # 4. Save today's snapshot (skip in single-rep test mode)
+    # 4. Save today's snapshot (only in production mode)
     today_date_str = today.strftime("%Y-%m-%d")
-    if not test_mode:
+    if not test_mode and not test_all:
         snapshot_rows = build_snapshot_rows(all_rep_data, today_date_str)
         try:
             write_snapshot(snapshot_rows, today_date_str)
