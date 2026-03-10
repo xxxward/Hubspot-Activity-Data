@@ -538,7 +538,7 @@ def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp) -> 
                     except (ValueError, TypeError):
                         duration_min = 0
                     context += f"  • {title} — {duration_min} min\n"
-                    if brief:
+                    if pd.notna(brief) and brief:
                         context += f"    {brief}\n"
                 context += "\n"
 
