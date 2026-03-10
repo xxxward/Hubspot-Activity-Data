@@ -202,10 +202,11 @@ def _supplement_meetings_from_gong(
     Credit reps who attended Gong-recorded meetings but aren't the HubSpot
     meeting owner.
 
-    Uses the ``all_attendees`` column (added to both Gong AI Summaries and
-    Gong Calls tabs) to identify every in-scope rep on a call.  Falls back
-    to the primary rep columns (rep_email / rep_name) when all_attendees is
-    not available.
+    Always resolves the primary rep first (rep_email / rep_name columns),
+    then supplements with additional attendees from the ``all_attendees``
+    column when available.  This ensures the primary rep (99% correct)
+    always gets credit, while all_attendees catches edge cases like
+    Owen attending Lance's meetings.
 
     Only adds entries where the Gong Calls tab shows direction="Conference"
     (actual meetings).  Inbound/Outbound calls are phone calls, not meetings.
@@ -243,15 +244,15 @@ def _supplement_meetings_from_gong(
     name_col = next((c for c in ("rep_name", "primary_rep") if c in gong_ai_summaries.columns), None)
     date_col = next((c for c in ("date", "started", "scheduled") if c in gong_ai_summaries.columns), None)
 
-    if attendees_col is None and email_col is None and name_col is None:
-        logger.info("Gong AI summaries missing attendee and rep columns — skipping supplementation.")
+    if email_col is None and name_col is None:
+        logger.info("Gong AI summaries missing rep columns — skipping supplementation.")
         return meetings
     if date_col is None:
         logger.info("Gong AI summaries missing date column — skipping supplementation.")
         return meetings
 
     if attendees_col:
-        logger.info("Using all_attendees column for Gong meeting attribution.")
+        logger.info("Using all_attendees column to supplement Gong meeting attribution.")
 
     gong = gong_ai_summaries.copy()
 
@@ -280,20 +281,28 @@ def _supplement_meetings_from_gong(
         if pd.isna(gong_date):
             continue
 
-        # Resolve all attending reps from the all_attendees column
+        # Always resolve the primary rep from email/name columns first
+        reps = []
+        seen = set()
+        if email_col and pd.notna(gc.get(email_col)):
+            email = str(gc[email_col]).strip().lower()
+            if email in _EMAIL_TO_REP:
+                name = _EMAIL_TO_REP[email]
+                reps.append(name)
+                seen.add(name)
+        if not reps and name_col and pd.notna(gc.get(name_col)):
+            name = str(gc[name_col]).strip()
+            if name in REPS_IN_SCOPE:
+                reps.append(name)
+                seen.add(name)
+
+        # Additionally parse all_attendees to catch reps who attended
+        # but aren't the primary owner (e.g., Owen on Lance's meetings)
         if attendees_col:
-            reps = _resolve_attendees(gc.get(attendees_col))
-        else:
-            # Fallback: resolve single primary rep from email/name columns
-            reps = []
-            if email_col and pd.notna(gc.get(email_col)):
-                email = str(gc[email_col]).strip().lower()
-                if email in _EMAIL_TO_REP:
-                    reps.append(_EMAIL_TO_REP[email])
-            if not reps and name_col and pd.notna(gc.get(name_col)):
-                name = str(gc[name_col]).strip()
-                if name in REPS_IN_SCOPE:
-                    reps.append(name)
+            for extra_rep in _resolve_attendees(gc.get(attendees_col)):
+                if extra_rep not in seen:
+                    reps.append(extra_rep)
+                    seen.add(extra_rep)
 
         if not reps:
             continue
