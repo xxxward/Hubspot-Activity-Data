@@ -1,0 +1,68 @@
+name: "📊 Daily Report Feedback"
+description: "Flag inaccuracies or issues with your daily activity report"
+title: "[Report Feedback] {rep_name} — {date}"
+labels: ["report-feedback", "claude-auto-fix"]
+body:
+  - type: input
+    id: rep_name
+    attributes:
+      label: Your Name
+      placeholder: e.g. Jake Lynch
+    validations:
+      required: true
+
+  - type: input
+    id: report_date
+    attributes:
+      label: Report Date
+      description: "Which day's report had the issue?"
+      placeholder: e.g. 2026-03-10
+    validations:
+      required: true
+
+  - type: dropdown
+    id: issue_type
+    attributes:
+      label: What type of issue?
+      multiple: true
+      options:
+        - Wrong activity count (calls, emails, meetings)
+        - Missing activities that I did today
+        - Ghost activities I did NOT do
+        - Wrong company/contact attributed
+        - AI summary is inaccurate or misleading
+        - KPI targets are wrong for my role
+        - Gong call details are incorrect
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: details
+    attributes:
+      label: "Detailed Feedback — Tell us exactly where it's off"
+      description: |
+        The more specific you are, the faster we fix it. Examples:
+        - "It says I made 12 calls but I only made 8 — the 4 calls to ABC Corp were yesterday"
+        - "Meeting with XYZ Company is missing — it was at 2pm today"
+        - "AI summary says I 'crushed it' but I missed my targets"
+      placeholder: |
+        What the report said:
+
+        What actually happened:
+
+        Any other context:
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: "What should the correct numbers/details be?"
+      description: "If you know the right numbers, share them here"
+      placeholder: |
+        Calls: should be X not Y
+        Emails: should be X not Y
+        Meetings: ...
+    validations:
+      required: false

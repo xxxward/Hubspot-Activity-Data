@@ -1,0 +1,36 @@
+name: "Auto-queue Report Feedback for Claude Code"
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  queue-for-claude:
+    if: contains(github.event.issue.labels.*.name, 'report-feedback')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Acknowledge feedback
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              body: [
+                `✅ **Feedback received!** Thank you for the detailed report.`,
+                ``,
+                `This issue has been auto-queued for Claude Code to investigate and fix.`,
+                `The \`claude-auto-fix\` label will trigger an automated review of the report logic.`,
+                ``,
+                `**What happens next:**`,
+                `1. Claude Code picks up this issue on the next run`,
+                `2. It analyzes the data pipeline for the reported discrepancy`,
+                `3. A fix PR is created and tagged for review`,
+                ``,
+                `We'll update this issue when a fix is in progress.`
+              ].join('\n')
+            });

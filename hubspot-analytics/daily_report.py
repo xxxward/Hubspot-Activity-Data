@@ -18,6 +18,7 @@ import sys
 from datetime import date, datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import anthropic
@@ -932,6 +933,17 @@ def build_email_html(
 
     {gong_section}
 
+    <!-- Feedback CTA -->
+    <div style="padding:24px; text-align:center;">
+        <a href="https://github.com/xxxward/Hubspot-Activity-Data/issues/new?template=report-feedback.yml&title={quote(f'[Report Feedback] {rep_name} — {today_str}')}&rep_name={quote(rep_name)}&report_date={quote(today_str)}"
+           target="_blank"
+           style="display:block; padding:20px 24px; background:linear-gradient(135deg, #ef4444 0%, #f97316 100%); border-radius:12px; text-decoration:none; font-size:18px; font-weight:800; color:#fff; letter-spacing:-0.3px; text-align:center; border:2px solid #fbbf24; box-shadow:0 4px 20px rgba(239,68,68,0.4);">
+            &#9888;&#65039; Is this report inaccurate?<br>
+            <span style="font-size:13px; font-weight:500; opacity:0.9;">Click here to give detailed feedback — the more specific, the better!</span>
+        </a>
+        <div style="margin-top:8px; font-size:11px; color:#6a6283;">Tell us exactly where it&rsquo;s off. Your feedback auto-queues fixes.</div>
+    </div>
+
     <!-- Footer -->
     <div style="padding:16px 24px; text-align:center; border-top:1px solid #2d2750;">
         <div style="font-size:11px; color:#6a6283;">Calyx Activity Hub &middot; End-of-Day Summary</div>
@@ -1019,6 +1031,17 @@ def build_manager_email_html(
         </tr>
         {rep_rows}
         </table>
+    </div>
+
+    <!-- Feedback CTA -->
+    <div style="padding:24px; text-align:center;">
+        <a href="https://github.com/xxxward/Hubspot-Activity-Data/issues/new?template=report-feedback.yml&title={quote(f'[Report Feedback] Manager Summary — {today_str}')}&report_date={quote(today_str)}"
+           target="_blank"
+           style="display:block; padding:20px 24px; background:linear-gradient(135deg, #ef4444 0%, #f97316 100%); border-radius:12px; text-decoration:none; font-size:18px; font-weight:800; color:#fff; letter-spacing:-0.3px; text-align:center; border:2px solid #fbbf24; box-shadow:0 4px 20px rgba(239,68,68,0.4);">
+            &#9888;&#65039; Is this report inaccurate?<br>
+            <span style="font-size:13px; font-weight:500; opacity:0.9;">Click here to give detailed feedback — the more specific, the better!</span>
+        </a>
+        <div style="margin-top:8px; font-size:11px; color:#6a6283;">Tell us exactly where it&rsquo;s off. Your feedback auto-queues fixes.</div>
     </div>
 
     <!-- Footer -->
