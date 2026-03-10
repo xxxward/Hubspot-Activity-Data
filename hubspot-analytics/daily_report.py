@@ -113,8 +113,15 @@ def _titles_match(title_a: str, title_b: str) -> bool:
     return len(overlap) >= 1 and len(overlap) / smaller >= 0.5
 
 
-def _supplement_meetings_from_gong(meetings: pd.DataFrame, gong_summaries: pd.DataFrame) -> pd.DataFrame:
+def _supplement_meetings_from_gong(
+    meetings: pd.DataFrame,
+    gong_summaries: pd.DataFrame,
+    gong_calls: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Add synthetic meeting rows for reps on Gong AI Summary calls who aren't the HubSpot meeting owner.
+
+    Only adds entries where direction="Conference" (actual meetings) from the
+    Gong Calls tab.  Inbound/Outbound are phone calls, not meetings.
 
     Uses fuzzy title matching to deduplicate — the same meeting can appear as:
       "Google Meet: Ben <> Jake" (HubSpot)
@@ -122,6 +129,22 @@ def _supplement_meetings_from_gong(meetings: pd.DataFrame, gong_summaries: pd.Da
       "Call with Buckeye Relief - Ben Begley" (Gong AI Summary)
     """
     if gong_summaries.empty:
+        return meetings
+
+    # Filter to only Conference-type calls (actual meetings, not phone calls)
+    if gong_calls is not None and not gong_calls.empty and "call_id" in gong_summaries.columns and "call_id" in gong_calls.columns:
+        direction_col = next((c for c in ("direction",) if c in gong_calls.columns), None)
+        if direction_col:
+            call_directions = gong_calls[["call_id", direction_col]].drop_duplicates("call_id")
+            call_directions["_direction_lower"] = call_directions[direction_col].astype(str).str.strip().str.lower()
+            conference_ids = set(call_directions.loc[call_directions["_direction_lower"] == "conference", "call_id"])
+            before = len(gong_summaries)
+            gong_summaries = gong_summaries[gong_summaries["call_id"].isin(conference_ids)]
+            logger.info("Gong direction filter: %d -> %d entries (Conference only).", before, len(gong_summaries))
+            if gong_summaries.empty:
+                return meetings
+    else:
+        logger.warning("Cannot filter Gong by direction — missing call_id or gong_calls. Skipping supplementation.")
         return meetings
 
     email_col = next((c for c in ("rep_email", "primary_rep_email") if c in gong_summaries.columns), None)
@@ -242,7 +265,18 @@ def load_data():
         )
         if "date" in gong_ai.columns:
             gong_ai["date"] = pd.to_datetime(gong_ai["date"], errors="coerce")
-    completed_meetings = _supplement_meetings_from_gong(completed_meetings, gong_ai)
+
+    # Normalize Gong Calls tab for direction filtering
+    gong_calls_df = norm.get("gong_calls", pd.DataFrame())
+    if not gong_calls_df.empty:
+        gong_calls_df.columns = (
+            gong_calls_df.columns.str.strip()
+            .str.lower()
+            .str.replace(r"[^a-z0-9]+", "_", regex=True)
+            .str.strip("_")
+        )
+
+    completed_meetings = _supplement_meetings_from_gong(completed_meetings, gong_ai, gong_calls_df)
 
     calls = apply_activity_filters(norm.get("calls", pd.DataFrame()))
 
