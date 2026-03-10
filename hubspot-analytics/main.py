@@ -112,10 +112,42 @@ _EMAIL_TO_REP: dict[str, str] = {
 
 
 def _normalize_title(t: str) -> str:
-    """Lowercase, strip common prefixes like [Gong], collapse whitespace."""
+    """Strip common prefixes and noise from meeting titles for dedup matching."""
     import re
-    t = re.sub(r"^\[gong\]\s*", "", t.strip().lower())
-    return re.sub(r"\s+", " ", t).strip()
+    t = t.strip().lower()
+    # Strip [Gong] prefix
+    t = re.sub(r"^\[gong\]\s*", "", t)
+    # Strip "Google Meet:" prefix
+    t = re.sub(r"^google meet:\s*", "", t)
+    # Strip "Call with <Company> - " prefix (e.g., "Call with Buckeye Relief - Ben Begley")
+    t = re.sub(r"^call with\s+.+?\s*-\s*", "", t)
+    # Strip "Calyx" and common filler words for matching
+    t = re.sub(r"\bcalyx\b", "", t)
+    # Collapse whitespace, strip punctuation except <>
+    t = re.sub(r"[<>]", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def _title_tokens(t: str) -> set[str]:
+    """Extract meaningful tokens from a normalized title for fuzzy matching."""
+    norm = _normalize_title(t)
+    # Extract tokens >= 2 chars, skip noise words
+    noise = {"the", "and", "for", "with", "from", "this", "that", "our",
+             "connect", "meeting", "call", "weekly", "check", "in"}
+    return {tok for tok in norm.split() if len(tok) >= 2 and tok not in noise}
+
+
+def _titles_match(title_a: str, title_b: str) -> bool:
+    """Check if two meeting titles refer to the same meeting using token overlap."""
+    tokens_a = _title_tokens(title_a)
+    tokens_b = _title_tokens(title_b)
+    if not tokens_a or not tokens_b:
+        return False
+    overlap = tokens_a & tokens_b
+    # Match if any shared meaningful tokens (person names, company names)
+    smaller = min(len(tokens_a), len(tokens_b))
+    return len(overlap) >= 1 and len(overlap) / smaller >= 0.5
 
 
 def _supplement_meetings_from_gong(
@@ -131,8 +163,10 @@ def _supplement_meetings_from_gong(
     but the AI summary correctly shows Jake Lynch as the rep who was on
     the call and participated.  We use AI summaries as the source of truth.
 
-    Deduplicates on (rep, date, normalized_title) so a rep can get credit
-    for multiple calls on the same day.
+    Deduplicates using fuzzy title matching — the same meeting can appear as:
+      "Google Meet: Ben <> Jake" (HubSpot)
+      "Ben <> Jake" (Gong AI Summary)
+      "Call with Buckeye Relief - Ben Begley" (Gong AI Summary)
     """
     if gong_ai_summaries.empty:
         return meetings
@@ -170,8 +204,8 @@ def _supplement_meetings_from_gong(
         gong_dates = gong_dates.dt.tz_localize(None)
     gong["_gong_date"] = gong_dates.dt.normalize()
 
-    # Build set of (rep, date, normalized_title) already in HubSpot meetings
-    existing: set[tuple[str, str, str]] = set()
+    # Build index of existing meeting titles per (rep, date) for fuzzy matching
+    existing_titles: dict[tuple[str, str], list[str]] = {}
     if not meetings.empty and "hubspot_owner_name" in meetings.columns and "meeting_start_time" in meetings.columns:
         mtg_dates = pd.to_datetime(meetings["meeting_start_time"], errors="coerce")
         if mtg_dates.dt.tz is not None:
@@ -180,7 +214,8 @@ def _supplement_meetings_from_gong(
         mtg_titles = meetings["meeting_name"].astype(str) if "meeting_name" in meetings.columns else pd.Series("", index=meetings.index)
         for rep, dt, title in zip(meetings["hubspot_owner_name"], mtg_dates, mtg_titles):
             if pd.notna(dt):
-                existing.add((str(rep), str(dt.date()), _normalize_title(str(title))))
+                key = (str(rep), str(dt.date()))
+                existing_titles.setdefault(key, []).append(str(title))
 
     # Create synthetic meeting rows for Gong calls not already credited
     new_rows = []
@@ -191,9 +226,16 @@ def _supplement_meetings_from_gong(
             continue
 
         title = str(gc.get("title", "Gong Call"))
-        key = (rep, str(gong_date.date()), _normalize_title(title))
-        if key in existing:
-            continue  # This rep already has this meeting — skip
+        date_key = (rep, str(gong_date.date()))
+
+        # Check if this Gong call fuzzy-matches any existing meeting for this rep+date
+        already_exists = False
+        for existing_title in existing_titles.get(date_key, []):
+            if _titles_match(title, existing_title):
+                already_exists = True
+                break
+        if already_exists:
+            continue
 
         new_rows.append({
             "meeting_start_time": gong_date,
@@ -205,7 +247,8 @@ def _supplement_meetings_from_gong(
             "has_gong": True,
             "_counts_as_meeting": True,
         })
-        existing.add(key)
+        # Add to existing so subsequent Gong entries also dedup against this one
+        existing_titles.setdefault(date_key, []).append(f"[Gong] {title}")
 
     if new_rows:
         logger.info("Gong supplementation: adding %d meetings for non-owner reps.", len(new_rows))
