@@ -53,8 +53,8 @@ REP_EMAILS: dict[str, str] = {
     "Brad Sherman": "bsherman@calyxcontainers.com",
 }
 
-# Managers receive the executive team summary (NOT CC'd on rep emails)
-MANAGER_EMAILS: list[str] = ["xward@calyxcontainers.com", "kbissell@calyxcontainers.com"]
+# Managers — CC'd on every rep email + receive the executive team summary
+MANAGER_EMAILS: list[str] = ["xward@calyxcontainers.com", "alex@calyxcontainers.com", "kbissell@calyxcontainers.com"]
 
 REP_ROLES: dict[str, str] = {
     "Owen Labombard": "sdr",
@@ -1221,7 +1221,7 @@ def main():
         if test_mode or test_all:
             send_email(to=preview_to, subject=subject, html_body=html)
         else:
-            send_email(to=REP_EMAILS[rep], subject=subject, html_body=html)
+            send_email(to=REP_EMAILS[rep], subject=subject, html_body=html, cc=MANAGER_EMAILS)
 
     # 8. Send executive summary to managers (Alex + Kyle)
     if not test_mode or test_all:
