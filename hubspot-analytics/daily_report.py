@@ -1221,7 +1221,7 @@ def main():
         if test_mode or test_all:
             send_email(to=preview_to, subject=subject, html_body=html)
         else:
-            send_email(to=REP_EMAILS[rep], subject=subject, html_body=html)
+            send_email(to=REP_EMAILS[rep], subject=subject, html_body=html, cc=MANAGER_EMAILS)
 
     # 8. Send executive summary to managers (Alex + Kyle)
     if not test_mode or test_all:
