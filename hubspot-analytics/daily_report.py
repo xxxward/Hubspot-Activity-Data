@@ -81,8 +81,21 @@ _EMAIL_TO_REP: dict[str, str] = {
 }
 
 
+def _normalize_title(t: str) -> str:
+    """Lowercase, strip common prefixes like [Gong], collapse whitespace."""
+    import re
+    t = re.sub(r"^\[gong\]\s*", "", t.strip().lower())
+    return re.sub(r"\s+", " ", t).strip()
+
+
 def _supplement_meetings_from_gong(meetings: pd.DataFrame, gong_summaries: pd.DataFrame) -> pd.DataFrame:
-    """Add synthetic meeting rows for reps on Gong calls who aren't the HubSpot meeting owner."""
+    """Add synthetic meeting rows for reps on Gong AI Summary calls who aren't the HubSpot meeting owner.
+
+    AI Summaries have the correct rep attribution — e.g., Brittany owns
+    the meeting in HubSpot but Jake was the actual sales rep on the call.
+    Deduplicates on (rep, date, normalized_title) so multiple calls per
+    day per rep are all captured.
+    """
     if gong_summaries.empty:
         return meetings
 
@@ -95,12 +108,14 @@ def _supplement_meetings_from_gong(meetings: pd.DataFrame, gong_summaries: pd.Da
     gong_summaries = gong_summaries.copy()
     gong_summaries["_gong_date"] = pd.to_datetime(gong_summaries[date_col], errors="coerce").dt.normalize()
 
-    existing: set[tuple[str, str]] = set()
+    # Build set of (rep, date, normalized_title) already in HubSpot meetings
+    existing: set[tuple[str, str, str]] = set()
     if not meetings.empty and "hubspot_owner_name" in meetings.columns and "meeting_start_time" in meetings.columns:
         mtg_dates = pd.to_datetime(meetings["meeting_start_time"], errors="coerce").dt.normalize()
-        for rep, dt in zip(meetings["hubspot_owner_name"], mtg_dates):
+        mtg_titles = meetings["meeting_name"].astype(str) if "meeting_name" in meetings.columns else pd.Series("", index=meetings.index)
+        for rep, dt, title in zip(meetings["hubspot_owner_name"], mtg_dates, mtg_titles):
             if pd.notna(dt):
-                existing.add((str(rep), str(dt.date())))
+                existing.add((str(rep), str(dt.date()), _normalize_title(str(title))))
 
     new_rows = []
     for _, gc in gong_summaries.iterrows():
@@ -117,19 +132,21 @@ def _supplement_meetings_from_gong(meetings: pd.DataFrame, gong_summaries: pd.Da
         gong_date = gc["_gong_date"]
         if pd.isna(gong_date):
             continue
-        pair = (rep, str(gong_date.date()))
-        if pair in existing:
+
+        title = str(gc.get("title", "Call"))
+        key = (rep, str(gong_date.date()), _normalize_title(title))
+        if key in existing:
             continue
 
         new_rows.append({
             "meeting_start_time": gong_date,
             "hubspot_owner_name": rep,
-            "meeting_name": f"[Gong] {gc.get('title', 'Call')}",
+            "meeting_name": f"[Gong] {title}",
             "company_name": gc.get("external_participants", ""),
             "meeting_outcome": "Completed",
             "meeting_source": "Gong",
         })
-        existing.add(pair)
+        existing.add(key)
 
     if new_rows:
         logger.info("Gong supplementation: adding %d meetings for non-owner reps.", len(new_rows))
@@ -177,10 +194,25 @@ def load_data():
     gong_ai = norm.get("gong_ai_summaries", pd.DataFrame())
     completed_meetings = _supplement_meetings_from_gong(completed_meetings, gong_ai)
 
+    calls = apply_activity_filters(norm.get("calls", pd.DataFrame()))
+
+    # Reclassify "Conference" calls as meetings
+    if not calls.empty and "call_direction" in calls.columns:
+        conf_mask = calls["call_direction"].str.strip().str.lower() == "conference"
+        conf_calls = calls[conf_mask].copy()
+        if not conf_calls.empty:
+            logger.info("Reclassifying %d conference calls as meetings.", len(conf_calls))
+            conf_calls["meeting_name"] = conf_calls.get("call_title", conf_calls.get("activity_type", "Conference Call"))
+            conf_calls["meeting_start_time"] = conf_calls.get("activity_date", pd.NaT)
+            conf_calls["meeting_outcome"] = "Completed"
+            conf_calls["meeting_source"] = "Conference Call"
+            completed_meetings = pd.concat([completed_meetings, conf_calls], ignore_index=True)
+            calls = calls[~conf_mask]
+
     return {
         "deals": apply_deal_filters(norm.get("deals", pd.DataFrame())),
         "meetings": completed_meetings,
-        "calls": apply_activity_filters(norm.get("calls", pd.DataFrame())),
+        "calls": calls,
         "emails": apply_activity_filters(norm.get("emails", pd.DataFrame())),
         "notes": apply_activity_filters(norm.get("notes", pd.DataFrame())),
         "tickets": apply_activity_filters(norm.get("tickets", pd.DataFrame())),

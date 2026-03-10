@@ -111,43 +111,39 @@ _EMAIL_TO_REP: dict[str, str] = {
 }
 
 
+def _normalize_title(t: str) -> str:
+    """Lowercase, strip common prefixes like [Gong], collapse whitespace."""
+    import re
+    t = re.sub(r"^\[gong\]\s*", "", t.strip().lower())
+    return re.sub(r"\s+", " ", t).strip()
+
+
 def _supplement_meetings_from_gong(
     meetings: pd.DataFrame,
-    gong_calls: pd.DataFrame,
+    gong_ai_summaries: pd.DataFrame,
 ) -> pd.DataFrame:
     """
-    Credit reps who were on Gong-recorded customer calls but aren't the
-    HubSpot meeting owner.  For each completed Gong call, if the Gong
-    primary rep doesn't already have a matching HubSpot meeting on that
-    date, create a synthetic meeting row so they get activity credit.
+    Credit reps who were on Gong-recorded calls but aren't the HubSpot
+    meeting owner.
+
+    The Gong AI Summaries tab has the correct rep attribution — e.g.,
+    a call might be 'owned' by Brittany Williams in HubSpot/Gong Calls,
+    but the AI summary correctly shows Jake Lynch as the rep who was on
+    the call and participated.  We use AI summaries as the source of truth.
+
+    Deduplicates on (rep, date, normalized_title) so a rep can get credit
+    for multiple calls on the same day.
     """
-    if gong_calls.empty:
+    if gong_ai_summaries.empty:
         return meetings
 
-    # Identify the rep email column in Gong calls
-    email_col = None
-    for c in ("primary_rep_email", "rep_email"):
-        if c in gong_calls.columns:
-            email_col = c
-            break
+    # Find columns — AI summaries use rep_name/rep_email; prioritize those
+    email_col = next((c for c in ("rep_email", "primary_rep_email") if c in gong_ai_summaries.columns), None)
+    name_col = next((c for c in ("rep_name", "primary_rep") if c in gong_ai_summaries.columns), None)
+    date_col = next((c for c in ("date", "started", "scheduled") if c in gong_ai_summaries.columns), None)
 
-    name_col = None
-    for c in ("primary_rep", "rep_name"):
-        if c in gong_calls.columns:
-            name_col = c
-            break
-
-    if email_col is None and name_col is None:
-        logger.info("Gong calls have no rep email or name column — skipping supplementation.")
-        return meetings
-
-    # Build date col for Gong calls
-    gong_date_col = None
-    for c in ("started", "date", "scheduled"):
-        if c in gong_calls.columns:
-            gong_date_col = c
-            break
-    if gong_date_col is None:
+    if (email_col is None and name_col is None) or date_col is None:
+        logger.info("Gong AI summaries missing rep or date columns — skipping supplementation.")
         return meetings
 
     # Resolve each Gong call's rep to a HubSpot rep name
@@ -162,44 +158,36 @@ def _supplement_meetings_from_gong(
                 return name
         return None
 
-    gong_calls = gong_calls.copy()
-    gong_calls["_resolved_rep"] = gong_calls.apply(_resolve_rep, axis=1)
-    gong_calls = gong_calls[gong_calls["_resolved_rep"].notna()]
+    gong = gong_ai_summaries.copy()
+    gong["_resolved_rep"] = gong.apply(_resolve_rep, axis=1)
+    gong = gong[gong["_resolved_rep"].notna()]
 
-    if gong_calls.empty:
+    if gong.empty:
         return meetings
 
-    # Parse Gong call dates to date-only for matching
-    gong_calls["_gong_date"] = pd.to_datetime(
-        gong_calls[gong_date_col], errors="coerce"
-    ).dt.normalize()
+    gong["_gong_date"] = pd.to_datetime(gong[date_col], errors="coerce").dt.normalize()
 
-    # Build a set of (rep, date) pairs already in HubSpot meetings
-    existing_pairs: set[tuple[str, str]] = set()
+    # Build set of (rep, date, normalized_title) already in HubSpot meetings
+    existing: set[tuple[str, str, str]] = set()
     if not meetings.empty and "hubspot_owner_name" in meetings.columns and "meeting_start_time" in meetings.columns:
         mtg_dates = pd.to_datetime(meetings["meeting_start_time"], errors="coerce").dt.normalize()
-        for rep, dt in zip(meetings["hubspot_owner_name"], mtg_dates):
+        mtg_titles = meetings["meeting_name"].astype(str) if "meeting_name" in meetings.columns else pd.Series("", index=meetings.index)
+        for rep, dt, title in zip(meetings["hubspot_owner_name"], mtg_dates, mtg_titles):
             if pd.notna(dt):
-                existing_pairs.add((str(rep), str(dt.date())))
+                existing.add((str(rep), str(dt.date()), _normalize_title(str(title))))
 
     # Create synthetic meeting rows for Gong calls not already credited
     new_rows = []
-    for _, gc in gong_calls.iterrows():
+    for _, gc in gong.iterrows():
         rep = gc["_resolved_rep"]
         gong_date = gc["_gong_date"]
         if pd.isna(gong_date):
             continue
 
-        pair = (rep, str(gong_date.date()))
-        if pair in existing_pairs:
-            continue  # Rep already has a meeting on this date — skip
-
-        title = gc.get("title", "Gong Call")
-        duration_sec = gc.get("duration_sec", 0)
-        try:
-            duration_sec = float(duration_sec) if pd.notna(duration_sec) else 0
-        except (ValueError, TypeError):
-            duration_sec = 0
+        title = str(gc.get("title", "Gong Call"))
+        key = (rep, str(gong_date.date()), _normalize_title(title))
+        if key in existing:
+            continue  # This rep already has this meeting — skip
 
         new_rows.append({
             "meeting_start_time": gong_date,
@@ -211,12 +199,11 @@ def _supplement_meetings_from_gong(
             "has_gong": True,
             "_counts_as_meeting": True,
         })
-        existing_pairs.add(pair)  # Prevent dupes within Gong data
+        existing.add(key)
 
     if new_rows:
         logger.info("Gong supplementation: adding %d meetings for non-owner reps.", len(new_rows))
-        new_df = pd.DataFrame(new_rows)
-        meetings = pd.concat([meetings, new_df], ignore_index=True)
+        meetings = pd.concat([meetings, pd.DataFrame(new_rows)], ignore_index=True)
     else:
         logger.info("Gong supplementation: no additional meetings to add.")
 
@@ -292,12 +279,31 @@ def load_all() -> AnalyticsData:
     if not meetings.empty and "meeting_outcome" in meetings.columns:
         meetings = meetings[meetings["meeting_outcome"].str.strip().str.lower() == "completed"]
 
-    # 6b - Supplement meetings with Gong calls for reps who participated
-    # but aren't the HubSpot owner (e.g., rep joined a customer call
-    # owned by someone else)
-    meetings = _supplement_meetings_from_gong(meetings, gong_calls_sheet)
+    # 6b - Supplement meetings from Gong AI Summaries for reps who
+    # participated but aren't the HubSpot owner.  AI summaries have the
+    # correct rep attribution (e.g., Brittany owns the meeting in HubSpot
+    # but Jake was the actual sales rep on the call).
+    meetings = _supplement_meetings_from_gong(meetings, gong_ai_summaries)
 
     calls = apply_activity_filters(norm.get("calls", pd.DataFrame()))
+
+    # 6c - Reclassify "Conference" calls as meetings (these are multi-party
+    # meetings that HubSpot logged as calls)
+    if not calls.empty and "call_direction" in calls.columns:
+        conf_mask = calls["call_direction"].str.strip().str.lower() == "conference"
+        conf_calls = calls[conf_mask].copy()
+        if not conf_calls.empty:
+            logger.info("Reclassifying %d conference calls as meetings.", len(conf_calls))
+            # Map call columns to meeting columns
+            conf_calls["meeting_name"] = conf_calls.get("call_title", conf_calls.get("activity_type", "Conference Call"))
+            conf_calls["meeting_start_time"] = conf_calls.get("activity_date", pd.NaT)
+            conf_calls["meeting_outcome"] = "Completed"
+            conf_calls["meeting_source"] = "Conference Call"
+            conf_calls["has_gong"] = False
+            conf_calls["_counts_as_meeting"] = True
+            meetings = pd.concat([meetings, conf_calls], ignore_index=True)
+            calls = calls[~conf_mask]
+
     emails = apply_activity_filters(norm.get("emails", pd.DataFrame()))
     notes = apply_activity_filters(norm.get("notes", pd.DataFrame()))
     tickets = norm.get("tickets", pd.DataFrame())
