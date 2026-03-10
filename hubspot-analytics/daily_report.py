@@ -1,9 +1,12 @@
 """
-Daily Activity Report — 5:00 PM MST
+Daily Activity Report — 4:30 PM MST
 Standalone script for scheduled execution via GitHub Actions.
 
 Summarizes TODAY's activity for each rep, highlights positives,
 provides encouragement, and emails the team.
+
+Executive summary goes to Alex & Kyle (managers).
+Individual rep reports go directly to each rep (no CC to management).
 """
 
 import argparse
@@ -47,7 +50,8 @@ REP_EMAILS: dict[str, str] = {
     "Brad Sherman": "bsherman@calyxcontainers.com",
 }
 
-CC_EMAILS: list[str] = ["xward@calyxcontainers.com", "kbissell@calyxcontainers.com"]
+# Managers receive the executive team summary (NOT CC'd on rep emails)
+MANAGER_EMAILS: list[str] = ["xward@calyxcontainers.com", "kbissell@calyxcontainers.com"]
 
 REP_ROLES: dict[str, str] = {
     "Owen Labombard": "sdr",
@@ -370,6 +374,28 @@ def _filter_rep(df: pd.DataFrame, rep_name: str) -> pd.DataFrame:
     return df[df["hubspot_owner_name"] == rep_name]
 
 
+def _split_tickets(tickets_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split tickets into Estimates and Sample Kits based on the pipeline column.
+
+    Pipeline values:
+      - "Pricing / Estimate Request(s)" → estimates
+      - "Sample Kit" → sample kits
+    Tickets with no pipeline or unknown pipeline go into estimates as fallback.
+    """
+    if tickets_df.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    pipeline_col = "pipeline" if "pipeline" in tickets_df.columns else None
+    if pipeline_col is None:
+        return tickets_df, pd.DataFrame()
+
+    pipeline_lower = tickets_df[pipeline_col].astype(str).str.strip().str.lower()
+    sample_mask = pipeline_lower.str.contains("sample", na=False)
+    estimates = tickets_df[~sample_mask]
+    sample_kits = tickets_df[sample_mask]
+    return estimates, sample_kits
+
+
 def _safe_num(val, default=0):
     if val is None or (isinstance(val, float) and np.isnan(val)):
         return default
@@ -406,12 +432,16 @@ def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp) -> 
     today_tickets = _filter_by_date(rep_tickets, "created_date", today_ts, today_ts)
     today_notes = _filter_by_date(rep_notes, "created_date", today_ts, today_ts)
 
+    # Split tickets into Estimates and Sample Kits
+    today_estimates, today_samples = _split_tickets(today_tickets)
+
     # This week's activity (rolling 7 days)
     week_meetings = _filter_by_date(rep_meetings, "meeting_start_time", week_start, today_ts)
     week_calls = _filter_by_date(rep_calls, "activity_date", week_start, today_ts)
     week_emails = _filter_by_date(rep_emails, "activity_date", week_start, today_ts)
     week_tickets = _filter_by_date(rep_tickets, "created_date", week_start, today_ts)
     week_notes = _filter_by_date(rep_notes, "created_date", week_start, today_ts)
+    week_estimates, week_samples = _split_tickets(week_tickets)
 
     # Previous week
     prev_meetings = _filter_by_date(rep_meetings, "meeting_start_time", prev_week_start, prev_week_end)
@@ -419,6 +449,7 @@ def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp) -> 
     prev_emails = _filter_by_date(rep_emails, "activity_date", prev_week_start, prev_week_end)
     prev_tickets = _filter_by_date(rep_tickets, "created_date", prev_week_start, prev_week_end)
     prev_notes = _filter_by_date(rep_notes, "created_date", prev_week_start, prev_week_end)
+    prev_estimates, prev_samples = _split_tickets(prev_tickets)
 
     # Companies touched today
     today_activity = pd.concat([today_meetings, today_calls, today_emails, today_tickets, today_notes], ignore_index=True)
@@ -459,7 +490,8 @@ def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp) -> 
     context += f"  Meetings: {len(today_meetings)}\n"
     context += f"  Calls: {len(today_calls)}\n"
     context += f"  Emails: {len(today_emails)}\n"
-    context += f"  Tickets: {len(today_tickets)}\n"
+    context += f"  Estimates/Pricing: {len(today_estimates)}\n"
+    context += f"  Sample Kits: {len(today_samples)}\n"
     context += f"  Notes: {len(today_notes)}\n"
     context += f"  Total touchpoints: {today_total}\n\n"
 
@@ -473,8 +505,8 @@ def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp) -> 
         context += f"COMPANIES ENGAGED TODAY: {', '.join(sorted(today_companies))}\n\n"
 
     context += f"ROLLING 7-DAY CONTEXT:\n"
-    context += f"  This week: {len(week_meetings)} mtgs, {len(week_calls)} calls, {len(week_emails)} emails, {len(week_tickets)} tickets, {len(week_notes)} notes (total: {week_total})\n"
-    context += f"  Prev week: {len(prev_meetings)} mtgs, {len(prev_calls)} calls, {len(prev_emails)} emails, {len(prev_tickets)} tickets, {len(prev_notes)} notes\n\n"
+    context += f"  This week: {len(week_meetings)} mtgs, {len(week_calls)} calls, {len(week_emails)} emails, {len(week_estimates)} estimates, {len(week_samples)} sample kits, {len(week_notes)} notes (total: {week_total})\n"
+    context += f"  Prev week: {len(prev_meetings)} mtgs, {len(prev_calls)} calls, {len(prev_emails)} emails, {len(prev_estimates)} estimates, {len(prev_samples)} sample kits, {len(prev_notes)} notes\n\n"
 
     if not active_deals.empty:
         context += f"DEALS CONNECTED TO TODAY'S ACTIVITY:\n"
@@ -514,7 +546,9 @@ def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp) -> 
         "today_meetings": len(today_meetings),
         "today_calls": len(today_calls),
         "today_emails": len(today_emails),
-        "today_tickets": len(today_tickets),
+        "today_estimates": len(today_estimates),
+        "today_samples": len(today_samples),
+        "today_tickets": len(today_tickets),  # kept for backwards compat
         "today_notes": len(today_notes),
         "week_total": week_total,
         "companies_touched": len(today_companies),
@@ -564,7 +598,8 @@ def generate_team_summary(client: anthropic.Anthropic, all_rep_data: dict[str, d
         team_context += f"{rep_name} ({role}): "
         team_context += f"{rep_data['today_meetings']} mtgs, {rep_data['today_calls']} calls, "
         team_context += f"{rep_data['today_emails']} emails, "
-        team_context += f"{rep_data['today_tickets']} tickets, {rep_data['today_notes']} notes "
+        team_context += f"{rep_data['today_estimates']} estimates, {rep_data['today_samples']} sample kits, "
+        team_context += f"{rep_data['today_notes']} notes "
         team_context += f"({rep_data['today_total']} total)\n"
 
     total_team = sum(d["today_total"] for d in all_rep_data.values())
@@ -598,7 +633,8 @@ def build_email_html(rep_name: str, rep_data: dict, ai_text: str, today_str: str
         ("Meetings", rep_data["today_meetings"], "#f472b6"),
         ("Calls", rep_data["today_calls"], "#818cf8"),
         ("Emails", rep_data["today_emails"], "#c084fc"),
-        ("Tickets", rep_data["today_tickets"], "#34d399"),
+        ("Estimates", rep_data["today_estimates"], "#34d399"),
+        ("Samples", rep_data["today_samples"], "#67e8f9"),
         ("Notes", rep_data["today_notes"], "#fb923c"),
     ]
 
@@ -681,7 +717,8 @@ def build_manager_email_html(team_summary: str, all_rep_data: dict[str, dict], t
             <td style="padding:10px 8px; text-align:center; color:#f472b6; font-weight:600;">{rd['today_meetings']}</td>
             <td style="padding:10px 8px; text-align:center; color:#818cf8; font-weight:600;">{rd['today_calls']}</td>
             <td style="padding:10px 8px; text-align:center; color:#c084fc; font-weight:600;">{rd['today_emails']}</td>
-            <td style="padding:10px 8px; text-align:center; color:#34d399; font-weight:600;">{rd['today_tickets']}</td>
+            <td style="padding:10px 8px; text-align:center; color:#34d399; font-weight:600;">{rd['today_estimates']}</td>
+            <td style="padding:10px 8px; text-align:center; color:#67e8f9; font-weight:600;">{rd['today_samples']}</td>
             <td style="padding:10px 8px; text-align:center; color:#fb923c; font-weight:600;">{rd['today_notes']}</td>
             <td style="padding:10px 8px; text-align:center; color:{total_color}; font-weight:700; font-size:16px;">{rd['today_total']}</td>
         </tr>"""
@@ -718,7 +755,8 @@ def build_manager_email_html(team_summary: str, all_rep_data: dict[str, dict], t
             <th style="padding:10px 8px; text-align:center; color:#f472b6; font-size:11px; text-transform:uppercase;">Mtgs</th>
             <th style="padding:10px 8px; text-align:center; color:#818cf8; font-size:11px; text-transform:uppercase;">Calls</th>
             <th style="padding:10px 8px; text-align:center; color:#c084fc; font-size:11px; text-transform:uppercase;">Emails</th>
-            <th style="padding:10px 8px; text-align:center; color:#34d399; font-size:11px; text-transform:uppercase;">Tickets</th>
+            <th style="padding:10px 8px; text-align:center; color:#34d399; font-size:11px; text-transform:uppercase;">Est.</th>
+            <th style="padding:10px 8px; text-align:center; color:#67e8f9; font-size:11px; text-transform:uppercase;">Samples</th>
             <th style="padding:10px 8px; text-align:center; color:#fb923c; font-size:11px; text-transform:uppercase;">Notes</th>
             <th style="padding:10px 8px; text-align:center; color:#6a6283; font-size:11px; text-transform:uppercase;">Total</th>
         </tr>
@@ -801,7 +839,7 @@ def main():
     now_mst = datetime.now(MST)
 
     # Guard against double-send: two cron entries cover DST, so skip if
-    # Mountain Time hour is outside the 4-8 PM window (target is 5 PM).
+    # Mountain Time hour is outside the 4-8 PM window (target is 4:30 PM).
     # Note: GitHub Actions cron can be delayed 1-3 hours, so the window
     # must be wide enough to accommodate late runs.
     if args.test is None and not (16 <= now_mst.hour <= 20):
@@ -857,7 +895,7 @@ def main():
         logger.info("Generating team summary...")
         team_summary = generate_team_summary(client, all_rep_data, today_str)
 
-    # 5. Send individual rep emails
+    # 5. Send individual rep emails (no CC to management)
     for rep in reps_to_report:
         subject = f"Your Daily Wins — {today.strftime('%A, %b %d')}"
         if test_mode:
@@ -869,11 +907,11 @@ def main():
         else:
             send_email(to=REP_EMAILS[rep], subject=subject, html_body=html)
 
-    # 6. Send manager summary (skip in test mode)
+    # 6. Send executive summary to managers (Alex + Kyle)
     if not test_mode:
         manager_subject = f"Team Daily Wins — {today.strftime('%A, %b %d')}"
         manager_html = build_manager_email_html(team_summary, all_rep_data, today_str)
-        for manager_email in CC_EMAILS:
+        for manager_email in MANAGER_EMAILS:
             send_email(to=manager_email, subject=manager_subject, html_body=manager_html)
 
     logger.info("=== Daily Report Complete ===")
