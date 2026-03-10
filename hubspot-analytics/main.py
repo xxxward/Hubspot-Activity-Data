@@ -153,6 +153,7 @@ def _titles_match(title_a: str, title_b: str) -> bool:
 def _supplement_meetings_from_gong(
     meetings: pd.DataFrame,
     gong_ai_summaries: pd.DataFrame,
+    gong_calls: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Credit reps who were on Gong-recorded calls but aren't the HubSpot
@@ -163,12 +164,32 @@ def _supplement_meetings_from_gong(
     but the AI summary correctly shows Jake Lynch as the rep who was on
     the call and participated.  We use AI summaries as the source of truth.
 
+    Only adds entries where the Gong Calls tab shows direction="Conference"
+    (actual meetings).  Inbound/Outbound calls are phone calls, not meetings.
+
     Deduplicates using fuzzy title matching — the same meeting can appear as:
       "Google Meet: Ben <> Jake" (HubSpot)
       "Ben <> Jake" (Gong AI Summary)
       "Call with Buckeye Relief - Ben Begley" (Gong AI Summary)
     """
     if gong_ai_summaries.empty:
+        return meetings
+
+    # Filter AI summaries to only Conference-type calls (actual meetings)
+    if gong_calls is not None and not gong_calls.empty and "call_id" in gong_ai_summaries.columns and "call_id" in gong_calls.columns:
+        direction_col = next((c for c in ("direction",) if c in gong_calls.columns), None)
+        if direction_col:
+            # Build call_id -> direction lookup from gong_calls
+            call_directions = gong_calls[["call_id", direction_col]].drop_duplicates("call_id")
+            call_directions["_direction_lower"] = call_directions[direction_col].astype(str).str.strip().str.lower()
+            conference_ids = set(call_directions.loc[call_directions["_direction_lower"] == "conference", "call_id"])
+            before = len(gong_ai_summaries)
+            gong_ai_summaries = gong_ai_summaries[gong_ai_summaries["call_id"].isin(conference_ids)]
+            logger.info("Gong direction filter: %d -> %d entries (Conference only).", before, len(gong_ai_summaries))
+            if gong_ai_summaries.empty:
+                return meetings
+    else:
+        logger.warning("Cannot filter Gong by direction — missing call_id or gong_calls. Skipping supplementation.")
         return meetings
 
     # Find columns — AI summaries use rep_name/rep_email; prioritize those
@@ -332,7 +353,7 @@ def load_all() -> AnalyticsData:
     # participated but aren't the HubSpot owner.  AI summaries have the
     # correct rep attribution (e.g., Brittany owns the meeting in HubSpot
     # but Jake was the actual sales rep on the call).
-    meetings = _supplement_meetings_from_gong(meetings, gong_ai_summaries)
+    meetings = _supplement_meetings_from_gong(meetings, gong_ai_summaries, gong_calls_sheet)
 
     calls = apply_activity_filters(norm.get("calls", pd.DataFrame()))
 
