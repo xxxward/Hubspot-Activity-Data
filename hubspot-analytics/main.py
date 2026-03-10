@@ -165,12 +165,18 @@ def _supplement_meetings_from_gong(
     if gong.empty:
         return meetings
 
-    gong["_gong_date"] = pd.to_datetime(gong[date_col], errors="coerce").dt.normalize()
+    gong_dates = pd.to_datetime(gong[date_col], errors="coerce")
+    if gong_dates.dt.tz is not None:
+        gong_dates = gong_dates.dt.tz_localize(None)
+    gong["_gong_date"] = gong_dates.dt.normalize()
 
     # Build set of (rep, date, normalized_title) already in HubSpot meetings
     existing: set[tuple[str, str, str]] = set()
     if not meetings.empty and "hubspot_owner_name" in meetings.columns and "meeting_start_time" in meetings.columns:
-        mtg_dates = pd.to_datetime(meetings["meeting_start_time"], errors="coerce").dt.normalize()
+        mtg_dates = pd.to_datetime(meetings["meeting_start_time"], errors="coerce")
+        if mtg_dates.dt.tz is not None:
+            mtg_dates = mtg_dates.dt.tz_localize(None)
+        mtg_dates = mtg_dates.dt.normalize()
         mtg_titles = meetings["meeting_name"].astype(str) if "meeting_name" in meetings.columns else pd.Series("", index=meetings.index)
         for rep, dt, title in zip(meetings["hubspot_owner_name"], mtg_dates, mtg_titles):
             if pd.notna(dt):
