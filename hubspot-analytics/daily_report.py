@@ -156,8 +156,8 @@ def _supplement_meetings_from_gong(
     """Credit reps who attended Gong-recorded meetings but aren't the HubSpot
     meeting owner.
 
-    Uses the ``all_attendees`` column to identify every in-scope rep on a call.
-    Falls back to primary rep columns when all_attendees is not available.
+    Always resolves the primary rep first (rep_email / rep_name), then
+    supplements with additional attendees from ``all_attendees`` when available.
 
     Only adds entries where direction="Conference" (actual meetings) from the
     Gong Calls tab.  Inbound/Outbound are phone calls, not meetings.
@@ -186,13 +186,13 @@ def _supplement_meetings_from_gong(
     name_col = next((c for c in ("rep_name", "primary_rep") if c in gong_summaries.columns), None)
     date_col = next((c for c in ("date", "started") if c in gong_summaries.columns), None)
 
-    if attendees_col is None and email_col is None and name_col is None:
+    if email_col is None and name_col is None:
         return meetings
     if date_col is None:
         return meetings
 
     if attendees_col:
-        logger.info("Using all_attendees column for Gong meeting attribution.")
+        logger.info("Using all_attendees column to supplement Gong meeting attribution.")
 
     gong_summaries = gong_summaries.copy()
     gong_dates = pd.to_datetime(gong_summaries[date_col], errors="coerce")
@@ -219,19 +219,27 @@ def _supplement_meetings_from_gong(
         if pd.isna(gong_date):
             continue
 
-        # Resolve all attending reps
+        # Always resolve the primary rep first
+        reps = []
+        seen = set()
+        if email_col and pd.notna(gc.get(email_col)):
+            rep = _EMAIL_TO_REP.get(str(gc[email_col]).strip().lower())
+            if rep:
+                reps.append(rep)
+                seen.add(rep)
+        if not reps and name_col and pd.notna(gc.get(name_col)):
+            name = str(gc[name_col]).strip()
+            if name in REPS_IN_SCOPE:
+                reps.append(name)
+                seen.add(name)
+
+        # Additionally parse all_attendees to catch reps who attended
+        # but aren't the primary owner (e.g., Owen on Lance's meetings)
         if attendees_col:
-            reps = _resolve_attendees(gc.get(attendees_col))
-        else:
-            reps = []
-            if email_col and pd.notna(gc.get(email_col)):
-                rep = _EMAIL_TO_REP.get(str(gc[email_col]).strip().lower())
-                if rep:
-                    reps.append(rep)
-            if not reps and name_col and pd.notna(gc.get(name_col)):
-                name = str(gc[name_col]).strip()
-                if name in REPS_IN_SCOPE:
-                    reps.append(name)
+            for extra_rep in _resolve_attendees(gc.get(attendees_col)):
+                if extra_rep not in seen:
+                    reps.append(extra_rep)
+                    seen.add(extra_rep)
 
         if not reps:
             continue
