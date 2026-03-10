@@ -71,6 +71,51 @@ ROLE_LABELS: dict[str, str] = {
     "ceo": "CEO",
 }
 
+# ── Daily KPI targets per rep ───────────────────────────────────────
+# These drive the AI commentary — it compares actual vs target.
+REP_KPIS: dict[str, dict] = {
+    "Owen Labombard": {
+        "role_desc": "SDR — pipeline generation, volume is king",
+        "calls": 25,
+        "emails": 50,
+        "meetings": 2,
+        "notes": 3,
+        "estimates_samples": 0,  # weekly target 3, tracked weekly not daily
+    },
+    "Lance Mitton": {
+        "role_desc": "Acquisition — converting new business, needs prospecting + meetings",
+        "calls": 8,
+        "emails": 25,
+        "meetings": 3,
+        "notes": 2,
+        "estimates_samples": 0,  # weekly target 5
+    },
+    "Brad Sherman": {
+        "role_desc": "Acquisition — mirrors Lance, dials more but converts less",
+        "calls": 10,
+        "emails": 25,
+        "meetings": 2,
+        "notes": 2,
+        "estimates_samples": 0,  # weekly target 5
+    },
+    "Jake Lynch": {
+        "role_desc": "Senior AM — protecting and growing biggest accounts ($16.6K avg deal)",
+        "calls": 5,
+        "emails": 20,
+        "meetings": 2,
+        "notes": 2,
+        "estimates_samples": 0,  # weekly target 3
+    },
+    "Dave Borkowski": {
+        "role_desc": "AM — managing 38 deals, needs higher activity for volume",
+        "calls": 5,
+        "emails": 20,
+        "meetings": 2,
+        "notes": 2,
+        "estimates_samples": 0,  # weekly target 4
+    },
+}
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # DATA LOADING (reuse full pipeline, no Streamlit)
@@ -497,6 +542,29 @@ def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp) -> 
     context += f"  Notes: {len(today_notes)}\n"
     context += f"  Total touchpoints: {today_total}\n\n"
 
+    # KPI scorecard — actual vs daily target
+    kpis = REP_KPIS.get(rep_name)
+    if kpis:
+        context += f"KPI SCORECARD (today vs daily target):\n"
+        context += f"  Role: {kpis['role_desc']}\n"
+        kpi_metrics = [
+            ("Calls", len(today_calls), kpis["calls"]),
+            ("Emails", len(today_emails), kpis["emails"]),
+            ("Meetings", len(today_meetings), kpis["meetings"]),
+            ("Notes", len(today_notes), kpis["notes"]),
+        ]
+        for metric_name, actual, target in kpi_metrics:
+            if target == 0:
+                continue
+            pct = round(actual / target * 100) if target else 0
+            status = "HIT" if actual >= target else "MISS"
+            context += f"  {metric_name}: {actual}/{target} ({pct}%) — {status}\n"
+        # Estimates/samples as weekly context
+        est_samp_total = len(today_estimates) + len(today_samples)
+        if est_samp_total > 0:
+            context += f"  Estimates/Samples today: {est_samp_total}\n"
+        context += "\n"
+
     if meeting_details:
         context += f"TODAY'S MEETINGS:\n"
         for md in meeting_details:
@@ -660,21 +728,22 @@ def generate_encouragement(client: anthropic.Anthropic, rep_name: str, context: 
         max_tokens=600,
         system=f"""You are writing an end-of-day activity summary email for {rep_name}, a sales rep at Calyx Containers (cannabis packaging).
 
-YOUR GOAL: Give an honest, well-informed recap of the day. Celebrate real wins, but be straight about low activity. You have access to their CRM activity AND their Gong call/meeting summaries — use both to paint an accurate picture.
+YOUR GOAL: Give an honest, KPI-driven recap of the day. You have their KPI SCORECARD showing actual vs daily target for each metric, their CRM activity, AND their Gong call/meeting summaries. Use all of it.
 
 RULES:
 - PAY ATTENTION TO THE DATE. Match your language to the actual day of the week.
-- If activity was genuinely strong, celebrate it — mention specific calls, meetings, companies by name.
-- If Gong recordings are available, reference what actually happened in their calls/meetings — outcomes, key discussion points, next steps. This shows you actually know what went on, not just that a meeting happened.
-- BE HONEST ABOUT LOW ACTIVITY. If their logged activity is very low (e.g., under 5 total touchpoints), call it out directly. Something like: "I know I don't see everything that happens during the day, but based on what's logged, activity was really light today." Don't sugarcoat a 2-activity day as a win.
-- You can still be encouraging and human — you're not trying to shame anyone. But don't pretend a slow day was a good day. Acknowledge it honestly and push for a stronger tomorrow.
-- Give ONE brief forward-looking suggestion based on what you actually see in their pipeline or calls.
+- THE KPI SCORECARD IS YOUR PRIMARY LENS. Reference specific numbers: "You hit 28 calls against a target of 25 — that's the kind of volume we need" or "3 calls against a target of 10 is way off pace."
+- If they're hitting or exceeding targets, celebrate it with specifics. Name companies, reference Gong call outcomes, highlight deals moving forward.
+- If they're missing targets, say it directly. Example: "I know I don't see everything that goes on during the day, but based on what's logged, you're at 40% of your call target. That needs to come up tomorrow."
+- If Gong recordings show substantive meetings, reference what actually happened — outcomes, key discussion points, next steps. This shows you know what went on, not just that a meeting occurred.
+- If Gong shows productive meetings but other KPIs are low, acknowledge the meetings were the focus — but flag missing follow-up (notes, tasks, emails after calls).
+- Give ONE specific forward-looking action tied to their KPI gaps or pipeline.
 - Tone: a straight-shooting coach who respects them enough to be real. Not mean, not fake-positive.
 - No markdown formatting, no bullet points, no headers — just flowing conversational paragraphs.
 - Under 150 words.
 - Do NOT start with "Hey" or "Hi" — just dive in.
 - If there's literally zero activity: "Nothing logged today. I know the system doesn't capture everything, but if the day got away from you, let's make tomorrow count."
-- If Gong shows substantive meetings but CRM activity is low, acknowledge the meetings were the focus and that's fine — but note if follow-up tasks are missing.""",
+- NEVER say "great day" or "solid effort" when they're below target. Be honest.""",
         messages=[{"role": "user", "content": context}],
     )
     return resp.content[0].text
@@ -712,6 +781,22 @@ def generate_team_summary(
                 team_context += f"  [{delta} vs yesterday]"
         team_context += "\n"
 
+        # KPI hits/misses for manager visibility
+        kpis = REP_KPIS.get(rep_name)
+        if kpis:
+            kpi_items = [
+                ("Calls", rep_data["today_calls"], kpis["calls"]),
+                ("Emails", rep_data["today_emails"], kpis["emails"]),
+                ("Meetings", rep_data["today_meetings"], kpis["meetings"]),
+                ("Notes", rep_data["today_notes"], kpis["notes"]),
+            ]
+            hits = [m for m, a, t in kpi_items if t > 0 and a >= t]
+            misses = [f"{m} {a}/{t}" for m, a, t in kpi_items if t > 0 and a < t]
+            if hits:
+                team_context += f"  KPI HIT: {', '.join(hits)}\n"
+            if misses:
+                team_context += f"  KPI MISS: {', '.join(misses)}\n"
+
         # Include Gong call details so managers see what actually happened
         rep_ctx = rep_data.get("context", "")
         gong_start = rep_ctx.find("GONG CALL/MEETING SUMMARIES FOR TODAY")
@@ -735,14 +820,15 @@ def generate_team_summary(
 
 RULES:
 - PAY ATTENTION TO THE DATE. Match your language to the actual day of the week.
-- 3-4 sentences max. Be honest and direct.
-- Call out standout performers by name — mention what their Gong calls/meetings were about if available.
-- If someone had very low activity, note it plainly (e.g., "Light day for [name]"). Don't sugarcoat it but don't be harsh either.
+- 3-5 sentences. Be honest and direct — this is for managers who need to know where to focus.
+- Lead with KPI performance: who hit their targets, who missed, and by how much. Use the KPI HIT/MISS data.
+- Call out standout performers by name. If someone crushed their targets, say so.
+- If someone missed multiple KPIs, flag it plainly (e.g., "Jake missed on calls and notes — worth a check-in"). Don't sugarcoat.
+- If Gong summaries show productive meetings, briefly note what was discussed.
 - If day-over-day deltas show significant drops, flag them.
-- If Gong summaries show productive meetings, highlight what was discussed.
-- Forward-looking: one sentence about team momentum or areas to watch.
+- End with one actionable observation about team patterns or areas to watch.
 - No markdown formatting — plain conversational text.
-- This goes to managers — be informative and straight.""",
+- This goes to managers who manage these reps — be informative, direct, and useful.""",
         messages=[{"role": "user", "content": team_context}],
     )
     return resp.content[0].text
