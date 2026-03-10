@@ -17,7 +17,7 @@ from src.parsing.normalize import (
     normalize_dataframe, build_uid_map_from_meetings,
     apply_owner_mapping, deduplicate_meetings, deduplicate_emails,
 )
-from src.parsing.filters import apply_deal_filters, apply_activity_filters
+from src.parsing.filters import apply_deal_filters, apply_activity_filters, REPS_IN_SCOPE
 from src.metrics.activity import count_activities, build_combined_activity_log
 from src.metrics.pipeline import pipeline_summary
 from src.metrics.terminal import terminal_summary
@@ -36,6 +36,7 @@ class AnalyticsData:
     calls: pd.DataFrame = field(default_factory=pd.DataFrame)
     emails: pd.DataFrame = field(default_factory=pd.DataFrame)
     notes: pd.DataFrame = field(default_factory=pd.DataFrame)
+    tasks: pd.DataFrame = field(default_factory=pd.DataFrame)  # Used in Deal Health only, not in activity metrics
     new_pipeline: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     # Gong data from Google Sheets (synced via Apps Script)
@@ -99,6 +100,129 @@ def _normalize_gong_sheet(df: pd.DataFrame, sheet_type: str) -> pd.DataFrame:
     return df
 
 
+# Map rep emails to HubSpot rep names for Gong matching
+_EMAIL_TO_REP: dict[str, str] = {
+    "jlynch@calyxcontainers.com": "Jake Lynch",
+    "olabombard@calyxcontainers.com": "Owen Labombard",
+    "lmitton@calyxcontainers.com": "Lance Mitton",
+    "dborkowski@calyxcontainers.com": "Dave Borkowski",
+    "bsherman@calyxcontainers.com": "Brad Sherman",
+    "xward@calyxcontainers.com": "Alex Gonzalez",
+}
+
+
+def _supplement_meetings_from_gong(
+    meetings: pd.DataFrame,
+    gong_calls: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Credit reps who were on Gong-recorded customer calls but aren't the
+    HubSpot meeting owner.  For each completed Gong call, if the Gong
+    primary rep doesn't already have a matching HubSpot meeting on that
+    date, create a synthetic meeting row so they get activity credit.
+    """
+    if gong_calls.empty:
+        return meetings
+
+    # Identify the rep email column in Gong calls
+    email_col = None
+    for c in ("primary_rep_email", "rep_email"):
+        if c in gong_calls.columns:
+            email_col = c
+            break
+
+    name_col = None
+    for c in ("primary_rep", "rep_name"):
+        if c in gong_calls.columns:
+            name_col = c
+            break
+
+    if email_col is None and name_col is None:
+        logger.info("Gong calls have no rep email or name column — skipping supplementation.")
+        return meetings
+
+    # Build date col for Gong calls
+    gong_date_col = None
+    for c in ("started", "date", "scheduled"):
+        if c in gong_calls.columns:
+            gong_date_col = c
+            break
+    if gong_date_col is None:
+        return meetings
+
+    # Resolve each Gong call's rep to a HubSpot rep name
+    def _resolve_rep(row):
+        if email_col and pd.notna(row.get(email_col)):
+            email = str(row[email_col]).strip().lower()
+            if email in _EMAIL_TO_REP:
+                return _EMAIL_TO_REP[email]
+        if name_col and pd.notna(row.get(name_col)):
+            name = str(row[name_col]).strip()
+            if name in REPS_IN_SCOPE:
+                return name
+        return None
+
+    gong_calls = gong_calls.copy()
+    gong_calls["_resolved_rep"] = gong_calls.apply(_resolve_rep, axis=1)
+    gong_calls = gong_calls[gong_calls["_resolved_rep"].notna()]
+
+    if gong_calls.empty:
+        return meetings
+
+    # Parse Gong call dates to date-only for matching
+    gong_calls["_gong_date"] = pd.to_datetime(
+        gong_calls[gong_date_col], errors="coerce"
+    ).dt.normalize()
+
+    # Build a set of (rep, date) pairs already in HubSpot meetings
+    existing_pairs: set[tuple[str, str]] = set()
+    if not meetings.empty and "hubspot_owner_name" in meetings.columns and "meeting_start_time" in meetings.columns:
+        mtg_dates = pd.to_datetime(meetings["meeting_start_time"], errors="coerce").dt.normalize()
+        for rep, dt in zip(meetings["hubspot_owner_name"], mtg_dates):
+            if pd.notna(dt):
+                existing_pairs.add((str(rep), str(dt.date())))
+
+    # Create synthetic meeting rows for Gong calls not already credited
+    new_rows = []
+    for _, gc in gong_calls.iterrows():
+        rep = gc["_resolved_rep"]
+        gong_date = gc["_gong_date"]
+        if pd.isna(gong_date):
+            continue
+
+        pair = (rep, str(gong_date.date()))
+        if pair in existing_pairs:
+            continue  # Rep already has a meeting on this date — skip
+
+        title = gc.get("title", "Gong Call")
+        duration_sec = gc.get("duration_sec", 0)
+        try:
+            duration_sec = float(duration_sec) if pd.notna(duration_sec) else 0
+        except (ValueError, TypeError):
+            duration_sec = 0
+
+        new_rows.append({
+            "meeting_start_time": gong_date,
+            "hubspot_owner_name": rep,
+            "meeting_name": f"[Gong] {title}",
+            "company_name": gc.get("external_participants", ""),
+            "meeting_outcome": "Completed",
+            "meeting_source": "Gong",
+            "has_gong": True,
+            "_counts_as_meeting": True,
+        })
+        existing_pairs.add(pair)  # Prevent dupes within Gong data
+
+    if new_rows:
+        logger.info("Gong supplementation: adding %d meetings for non-owner reps.", len(new_rows))
+        new_df = pd.DataFrame(new_rows)
+        meetings = pd.concat([meetings, new_df], ignore_index=True)
+    else:
+        logger.info("Gong supplementation: no additional meetings to add.")
+
+    return meetings
+
+
 def load_all() -> AnalyticsData:
     """
     Full pipeline:
@@ -117,7 +241,7 @@ def load_all() -> AnalyticsData:
     # 2 - Normalize HubSpot columns & types
     logger.info("Normalizing...")
     norm = {}
-    hubspot_tabs = ("deals", "meetings", "calls", "tickets", "emails", "notes", "new_pipeline")
+    hubspot_tabs = ("deals", "meetings", "calls", "tickets", "emails", "notes", "tasks", "new_pipeline")
     for k, v in raw.items():
         if k in hubspot_tabs:
             norm[k] = normalize_dataframe(v)
@@ -146,7 +270,7 @@ def load_all() -> AnalyticsData:
 
     # 4 - Apply owner mapping per tab type (skip tasks — not tracked)
     logger.info("Applying owner mappings...")
-    for tab_type in ("deals", "meetings", "calls", "tickets", "emails", "notes", "new_pipeline"):
+    for tab_type in ("deals", "meetings", "calls", "tickets", "emails", "notes", "tasks", "new_pipeline"):
         if tab_type in norm and not norm[tab_type].empty:
             norm[tab_type] = apply_owner_mapping(norm[tab_type], uid_map, tab_type)
 
@@ -167,10 +291,17 @@ def load_all() -> AnalyticsData:
     # Only completed meetings count as activity (exclude Scheduled, Canceled, No Show, etc.)
     if not meetings.empty and "meeting_outcome" in meetings.columns:
         meetings = meetings[meetings["meeting_outcome"].str.strip().str.lower() == "completed"]
+
+    # 6b - Supplement meetings with Gong calls for reps who participated
+    # but aren't the HubSpot owner (e.g., rep joined a customer call
+    # owned by someone else)
+    meetings = _supplement_meetings_from_gong(meetings, gong_calls_sheet)
+
     calls = apply_activity_filters(norm.get("calls", pd.DataFrame()))
     emails = apply_activity_filters(norm.get("emails", pd.DataFrame()))
     notes = apply_activity_filters(norm.get("notes", pd.DataFrame()))
     tickets = norm.get("tickets", pd.DataFrame())
+    tasks = apply_activity_filters(norm.get("tasks", pd.DataFrame()))  # For Deal Health only
     new_pipeline = apply_activity_filters(norm.get("new_pipeline", pd.DataFrame()))
 
     # 7 - Metrics (no tasks)
@@ -195,6 +326,7 @@ def load_all() -> AnalyticsData:
         calls=calls,
         emails=emails,
         notes=notes,
+        tasks=tasks,
         new_pipeline=new_pipeline,
         gong_ai_summaries=gong_ai_summaries,
         gong_calls=gong_calls_sheet,
