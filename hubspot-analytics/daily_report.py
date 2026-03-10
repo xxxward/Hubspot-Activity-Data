@@ -106,12 +106,18 @@ def _supplement_meetings_from_gong(meetings: pd.DataFrame, gong_summaries: pd.Da
         return meetings
 
     gong_summaries = gong_summaries.copy()
-    gong_summaries["_gong_date"] = pd.to_datetime(gong_summaries[date_col], errors="coerce").dt.normalize()
+    gong_dates = pd.to_datetime(gong_summaries[date_col], errors="coerce")
+    if gong_dates.dt.tz is not None:
+        gong_dates = gong_dates.dt.tz_localize(None)
+    gong_summaries["_gong_date"] = gong_dates.dt.normalize()
 
     # Build set of (rep, date, normalized_title) already in HubSpot meetings
     existing: set[tuple[str, str, str]] = set()
     if not meetings.empty and "hubspot_owner_name" in meetings.columns and "meeting_start_time" in meetings.columns:
-        mtg_dates = pd.to_datetime(meetings["meeting_start_time"], errors="coerce").dt.normalize()
+        mtg_dates = pd.to_datetime(meetings["meeting_start_time"], errors="coerce")
+        if mtg_dates.dt.tz is not None:
+            mtg_dates = mtg_dates.dt.tz_localize(None)
+        mtg_dates = mtg_dates.dt.normalize()
         mtg_titles = meetings["meeting_name"].astype(str) if "meeting_name" in meetings.columns else pd.Series("", index=meetings.index)
         for rep, dt, title in zip(meetings["hubspot_owner_name"], mtg_dates, mtg_titles):
             if pd.notna(dt):
@@ -191,7 +197,18 @@ def load_data():
 
     logger.info("Filtering...")
     completed_meetings = _filter_completed_meetings(apply_activity_filters(norm.get("meetings", pd.DataFrame())))
+
+    # Normalize Gong AI summaries column names (snake_case for consistent access)
     gong_ai = norm.get("gong_ai_summaries", pd.DataFrame())
+    if not gong_ai.empty:
+        gong_ai.columns = (
+            gong_ai.columns.str.strip()
+            .str.lower()
+            .str.replace(r"[^a-z0-9]+", "_", regex=True)
+            .str.strip("_")
+        )
+        if "date" in gong_ai.columns:
+            gong_ai["date"] = pd.to_datetime(gong_ai["date"], errors="coerce")
     completed_meetings = _supplement_meetings_from_gong(completed_meetings, gong_ai)
 
     calls = apply_activity_filters(norm.get("calls", pd.DataFrame()))

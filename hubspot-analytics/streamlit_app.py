@@ -1296,7 +1296,6 @@ if st.session_state.page == "command":
         ("Meetings", f"{len(fm):,}", "pink"),
         ("Calls", f"{len(fc):,}", "blue"),
         ("Emails", f"{len(fe):,}", "purple"),
-        ("Tasks", f"{len(ft):,}", "amber"),
         ("Notes", f"{len(fn):,}", "violet"),
         ("Tickets", f"{len(fk):,}", "red"),
     ])
@@ -1326,13 +1325,12 @@ if st.session_state.page == "command":
             # Role labels
             lb_display["Role "] = lb_display["Role"].map(ROLE_LABELS)
 
-            show_cols = ["Rank", "Rep", "Role ", "Meetings", "Calls", "Emails", "Tasks",
-                         "Overdue", "Streak 🔥", "WoW", "Score", "Level "]
+            show_cols = ["Rank", "Rep", "Role ", "Meetings", "Calls", "Emails",
+                         "Notes", "Tickets", "Streak 🔥", "WoW", "Score", "Level "]
             show_cols = [c for c in show_cols if c in lb_display.columns]
             st.dataframe(lb_display[show_cols], use_container_width=True, hide_index=True,
                          column_config={
                              "Score": st.column_config.NumberColumn("Score", format="%.1f"),
-                             "Overdue": st.column_config.NumberColumn("Overdue ⚠️"),
                          })
         else:
             empty_state()
@@ -1340,8 +1338,8 @@ if st.session_state.page == "command":
     with col_mix:
         section_header("🍩", "Activity Mix", C["emails"])
         mix_data = pd.DataFrame({
-            "Type": ["Meetings", "Calls", "Emails", "Tasks", "Tickets", "Notes"],
-            "Count": [len(fm), len(fc), len(fe), len(ft), len(fk), len(fn)],
+            "Type": ["Meetings", "Calls", "Emails", "Tickets", "Notes"],
+            "Count": [len(fm), len(fc), len(fe), len(fk), len(fn)],
         })
         mix_data = mix_data[mix_data["Count"] > 0]
         if not mix_data.empty:
@@ -1350,7 +1348,7 @@ if st.session_state.page == "command":
                 color="Type",
                 color_discrete_map={
                     "Meetings": C["meetings"], "Calls": C["calls"], "Emails": C["emails"],
-                    "Tasks": C["tasks"], "Tickets": C["tickets"], "Notes": C["notes"],
+                    "Tickets": C["tickets"], "Notes": C["notes"],
                 },
             )
             fig_mix.update_traces(textinfo="label+value", textfont=dict(color="#ede9fc", size=11),
@@ -1528,7 +1526,6 @@ if st.session_state.page == "command":
             ("Meetings", fm, "meeting_start_time"),
             ("Calls", fc, "activity_date"),
             ("Emails", fe, "activity_date"),
-            ("Tasks", ft, "activity_date"),
         ]:
             if df_src.empty:
                 continue
@@ -1559,7 +1556,7 @@ if st.session_state.page == "command":
                 hourly, x="Hour", y="Count", color="Type",
                 color_discrete_map={
                     "Meetings": C["meetings"], "Calls": C["calls"],
-                    "Emails": C["emails"], "Tasks": C["tasks"],
+                    "Emails": C["emails"],
                 },
                 barmode="stack",
             )
@@ -1590,7 +1587,7 @@ if st.session_state.page == "command":
                     x="period_day", y="Count", color="Type",
                     color_discrete_map={
                         "meetings": C["meetings"], "calls": C["calls"],
-                        "emails": C["emails"], "completed_tasks": C["tasks"],
+                        "emails": C["emails"],
                     },
                 )
                 fig_trend.update_traces(line_width=2, fill="tonexty", opacity=0.7)
@@ -1612,7 +1609,7 @@ if st.session_state.page == "command":
             role = r["Role"]
             initials = "".join([w[0] for w in rep.split()[:2]]).upper()
             color = rep_colors.get(role, "#a78bfa")
-            total_rep = r["Meetings"] + r["Calls"] + r["Emails"] + r["Tasks"] + r["Notes"] + r["Tickets"]
+            total_rep = r["Meetings"] + r["Calls"] + r["Emails"] + r["Notes"] + r["Tickets"]
             level_text, level_cls = SCORE_LEVELS.get(r["Level"], ("", ""))
             role_label = ROLE_LABELS.get(role, "")
             streak = r.get("Streak", 0)
@@ -1655,7 +1652,7 @@ if st.session_state.page == "command":
                     </div>
                     <div class="rep-stats">
                         {r['Meetings']} mtgs · {r['Calls']} calls · {r['Emails']} emails<br>
-                        {r['Tasks']} tasks · {r['Overdue']} overdue · {total_rep} total
+                        {r['Notes']} notes · {r['Tickets']} tickets · {total_rep} total
                     </div>
                     <div style="display:flex;align-items:baseline;gap:8px;margin-top:10px;">
                         <div class="rep-score">{r['Score']}</div>
