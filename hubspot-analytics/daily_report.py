@@ -517,7 +517,7 @@ def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp) -> 
             context += f"${_safe_num(deal.get('amount', 0)):,.0f} — {deal.get('deal_stage', '')}\n"
         context += "\n"
 
-    # Gong AI summary enrichment (from Google Sheets)
+    # Gong AI summary enrichment — filtered to TODAY only
     gong_summaries = datasets.get("gong_ai_summaries", pd.DataFrame())
     if not gong_summaries.empty:
         rep_col = None
@@ -525,13 +525,22 @@ def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp) -> 
             if c in gong_summaries.columns:
                 rep_col = c
                 break
+        date_col = next((c for c in ("date", "started") if c in gong_summaries.columns), None)
         if rep_col:
-            rep_gong = gong_summaries[gong_summaries[rep_col] == rep_name]
+            rep_gong = gong_summaries[gong_summaries[rep_col] == rep_name].copy()
+            # Filter to today's calls only
+            if date_col and not rep_gong.empty:
+                gong_dates = pd.to_datetime(rep_gong[date_col], errors="coerce")
+                if gong_dates.dt.tz is not None:
+                    gong_dates = gong_dates.dt.tz_localize(None)
+                rep_gong = rep_gong[gong_dates.dt.normalize() == today_ts]
             if not rep_gong.empty:
-                context += f"GONG CALL SUMMARIES ({len(rep_gong)} calls):\n"
-                for _, gc in rep_gong.head(5).iterrows():
+                context += f"GONG CALL/MEETING SUMMARIES FOR TODAY ({len(rep_gong)} recordings):\n"
+                for _, gc in rep_gong.iterrows():
                     title = gc.get("title", "Call")
                     brief = gc.get("brief_summary", "")
+                    outcome = gc.get("outcome", "")
+                    key_points = gc.get("key_points", gc.get("key_action_items", ""))
                     duration_s = gc.get("duration_sec", gc.get("duration_(sec)", 0))
                     try:
                         duration_min = round(float(duration_s) / 60, 1) if duration_s else 0
@@ -539,8 +548,14 @@ def build_rep_context(datasets: dict, rep_name: str, today_ts: pd.Timestamp) -> 
                         duration_min = 0
                     context += f"  • {title} — {duration_min} min\n"
                     if pd.notna(brief) and brief:
-                        context += f"    {brief}\n"
+                        context += f"    Summary: {brief}\n"
+                    if pd.notna(outcome) and outcome:
+                        context += f"    Outcome: {outcome}\n"
+                    if pd.notna(key_points) and key_points:
+                        context += f"    Key points: {key_points}\n"
                 context += "\n"
+            else:
+                context += "GONG CALL/MEETING SUMMARIES FOR TODAY: None recorded.\n\n"
 
     # Active deal summary for snapshot
     active_deal_count = 0
@@ -639,26 +654,27 @@ def build_delta_context(rep_name: str, rep_data: dict, prev_snapshot: dict | Non
 # ═══════════════════════════════════════════════════════════════════════
 
 def generate_encouragement(client: anthropic.Anthropic, rep_name: str, context: str) -> str:
-    """Generate a positive, encouraging daily summary for one rep."""
+    """Generate an honest, informed daily summary for one rep."""
     resp = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=600,
         system=f"""You are writing an end-of-day activity summary email for {rep_name}, a sales rep at Calyx Containers (cannabis packaging).
 
-YOUR GOAL: Highlight positives, provide encouragement, and offer one small helpful insight. This is NOT a big-brother report — it's a daily win tracker and momentum builder.
+YOUR GOAL: Give an honest, well-informed recap of the day. Celebrate real wins, but be straight about low activity. You have access to their CRM activity AND their Gong call/meeting summaries — use both to paint an accurate picture.
 
 RULES:
-- PAY ATTENTION TO THE DATE in the report. The day of the week matters — do NOT say things like "great close to the week" unless it's actually Thursday or Friday. If it's Monday, reference the start of the week. If it's mid-week, reference mid-week momentum. Match your language to the actual day.
-- Lead with what went WELL today. Find the wins, no matter how small.
-- If activity was high, celebrate it. If it was low, note what WAS done and encourage tomorrow.
-- Mention specific companies or meetings by name when available — it shows you're paying attention.
-- Give ONE brief forward-looking insight or suggestion (not a lecture).
-- Keep it warm, human, and concise — like a supportive team lead checking in at end of day.
-- Tone: encouraging coach, not surveillance software.
+- PAY ATTENTION TO THE DATE. Match your language to the actual day of the week.
+- If activity was genuinely strong, celebrate it — mention specific calls, meetings, companies by name.
+- If Gong recordings are available, reference what actually happened in their calls/meetings — outcomes, key discussion points, next steps. This shows you actually know what went on, not just that a meeting happened.
+- BE HONEST ABOUT LOW ACTIVITY. If their logged activity is very low (e.g., under 5 total touchpoints), call it out directly. Something like: "I know I don't see everything that happens during the day, but based on what's logged, activity was really light today." Don't sugarcoat a 2-activity day as a win.
+- You can still be encouraging and human — you're not trying to shame anyone. But don't pretend a slow day was a good day. Acknowledge it honestly and push for a stronger tomorrow.
+- Give ONE brief forward-looking suggestion based on what you actually see in their pipeline or calls.
+- Tone: a straight-shooting coach who respects them enough to be real. Not mean, not fake-positive.
 - No markdown formatting, no bullet points, no headers — just flowing conversational paragraphs.
 - Under 150 words.
 - Do NOT start with "Hey" or "Hi" — just dive in.
-- If there's literally zero activity, don't shame — just say "Quiet day on the board" and pivot to tomorrow.""",
+- If there's literally zero activity: "Nothing logged today. I know the system doesn't capture everything, but if the day got away from you, let's make tomorrow count."
+- If Gong shows substantive meetings but CRM activity is low, acknowledge the meetings were the focus and that's fine — but note if follow-up tasks are missing.""",
         messages=[{"role": "user", "content": context}],
     )
     return resp.content[0].text
@@ -696,6 +712,14 @@ def generate_team_summary(
                 team_context += f"  [{delta} vs yesterday]"
         team_context += "\n"
 
+        # Include Gong call details so managers see what actually happened
+        rep_ctx = rep_data.get("context", "")
+        gong_start = rep_ctx.find("GONG CALL/MEETING SUMMARIES FOR TODAY")
+        if gong_start >= 0:
+            gong_end = rep_ctx.find("\n\n", gong_start)
+            gong_block = rep_ctx[gong_start:gong_end] if gong_end > 0 else rep_ctx[gong_start:]
+            team_context += f"  {gong_block}\n"
+
     total_team = sum(d["today_total"] for d in all_rep_data.values())
     prev_team_total = sum(int(v.get("total", 0)) for v in (prev_by_rep or {}).values())
     team_context += f"\nTEAM TOTAL: {total_team} touchpoints"
@@ -710,13 +734,15 @@ def generate_team_summary(
         system="""You are writing a brief team activity summary for sales managers at Calyx Containers.
 
 RULES:
-- PAY ATTENTION TO THE DATE. Match your language to the actual day of the week — don't say "great close to the week" on a Monday or Wednesday.
-- 2-3 sentences max. Highlight the team's wins and momentum.
-- Call out standout performers by name.
-- If day-over-day deltas are provided, note significant changes (big increases or drops).
-- Keep it positive and forward-looking.
+- PAY ATTENTION TO THE DATE. Match your language to the actual day of the week.
+- 3-4 sentences max. Be honest and direct.
+- Call out standout performers by name — mention what their Gong calls/meetings were about if available.
+- If someone had very low activity, note it plainly (e.g., "Light day for [name]"). Don't sugarcoat it but don't be harsh either.
+- If day-over-day deltas show significant drops, flag them.
+- If Gong summaries show productive meetings, highlight what was discussed.
+- Forward-looking: one sentence about team momentum or areas to watch.
 - No markdown formatting — plain conversational text.
-- This goes to managers — keep it high-level.""",
+- This goes to managers — be informative and straight.""",
         messages=[{"role": "user", "content": team_context}],
     )
     return resp.content[0].text
