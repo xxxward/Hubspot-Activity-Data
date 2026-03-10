@@ -9,8 +9,17 @@ on:
     - cron: "30 23 * * 1-5"
   workflow_dispatch:
     inputs:
+      mode:
+        description: "Run mode"
+        required: true
+        type: choice
+        default: "preview"
+        options:
+          - preview
+          - test-single-rep
+          - production
       test_rep:
-        description: "Test mode — enter a rep name (e.g. Brad Sherman) to send only their report to xward. Leave blank for normal run."
+        description: "Rep name (only for test-single-rep mode, e.g. Brad Sherman)"
         required: false
         default: ""
 
@@ -49,7 +58,10 @@ jobs:
           GONG_SECRET_KEY: ${{ secrets.GONG_SECRET_KEY }}
           GONG_BASE_URL: ${{ secrets.GONG_BASE_URL }}
         run: |
-          if [ -n "${{ github.event.inputs.test_rep }}" ]; then
+          MODE="${{ github.event.inputs.mode }}"
+          if [ "$MODE" = "preview" ]; then
+            python daily_report.py --test-all
+          elif [ "$MODE" = "test-single-rep" ] && [ -n "${{ github.event.inputs.test_rep }}" ]; then
             python daily_report.py --test "${{ github.event.inputs.test_rep }}"
           else
             python daily_report.py
