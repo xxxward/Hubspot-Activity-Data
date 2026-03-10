@@ -53,8 +53,8 @@ REP_EMAILS: dict[str, str] = {
     "Brad Sherman": "bsherman@calyxcontainers.com",
 }
 
-# Managers receive the executive team summary (NOT CC'd on rep emails)
-MANAGER_EMAILS: list[str] = ["xward@calyxcontainers.com", "kbissell@calyxcontainers.com"]
+# Managers — CC'd on every rep email + receive the executive team summary
+MANAGER_EMAILS: list[str] = ["xward@calyxcontainers.com", "alex@calyxcontainers.com", "kbissell@calyxcontainers.com"]
 
 REP_ROLES: dict[str, str] = {
     "Owen Labombard": "sdr",
