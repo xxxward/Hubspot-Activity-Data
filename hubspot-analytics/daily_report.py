@@ -113,20 +113,54 @@ def _titles_match(title_a: str, title_b: str) -> bool:
     return len(overlap) >= 1 and len(overlap) / smaller >= 0.5
 
 
+def _resolve_attendees(attendees_value) -> list[str]:
+    """Parse the all_attendees column into a list of in-scope rep names."""
+    if pd.isna(attendees_value):
+        return []
+    raw = str(attendees_value).strip()
+    if not raw:
+        return []
+
+    reps = []
+    seen = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        email_lower = part.lower()
+        if email_lower in _EMAIL_TO_REP:
+            name = _EMAIL_TO_REP[email_lower]
+            if name not in seen:
+                reps.append(name)
+                seen.add(name)
+            continue
+        if part in REPS_IN_SCOPE:
+            if part not in seen:
+                reps.append(part)
+                seen.add(part)
+            continue
+        part_lower = part.lower()
+        for rep_name in REPS_IN_SCOPE:
+            if rep_name.lower() == part_lower and rep_name not in seen:
+                reps.append(rep_name)
+                seen.add(rep_name)
+                break
+    return reps
+
+
 def _supplement_meetings_from_gong(
     meetings: pd.DataFrame,
     gong_summaries: pd.DataFrame,
     gong_calls: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Add synthetic meeting rows for reps on Gong AI Summary calls who aren't the HubSpot meeting owner.
+    """Credit reps who attended Gong-recorded meetings but aren't the HubSpot
+    meeting owner.
+
+    Uses the ``all_attendees`` column to identify every in-scope rep on a call.
+    Falls back to primary rep columns when all_attendees is not available.
 
     Only adds entries where direction="Conference" (actual meetings) from the
     Gong Calls tab.  Inbound/Outbound are phone calls, not meetings.
-
-    Uses fuzzy title matching to deduplicate — the same meeting can appear as:
-      "Google Meet: Ben <> Jake" (HubSpot)
-      "Ben <> Jake" (Gong AI Summary)
-      "Call with Buckeye Relief - Ben Begley" (Gong AI Summary)
     """
     if gong_summaries.empty:
         return meetings
@@ -147,11 +181,18 @@ def _supplement_meetings_from_gong(
         logger.warning("Cannot filter Gong by direction — missing call_id or gong_calls. Skipping supplementation.")
         return meetings
 
+    attendees_col = next((c for c in ("all_attendees",) if c in gong_summaries.columns), None)
     email_col = next((c for c in ("rep_email", "primary_rep_email") if c in gong_summaries.columns), None)
     name_col = next((c for c in ("rep_name", "primary_rep") if c in gong_summaries.columns), None)
     date_col = next((c for c in ("date", "started") if c in gong_summaries.columns), None)
-    if (email_col is None and name_col is None) or date_col is None:
+
+    if attendees_col is None and email_col is None and name_col is None:
         return meetings
+    if date_col is None:
+        return meetings
+
+    if attendees_col:
+        logger.info("Using all_attendees column for Gong meeting attribution.")
 
     gong_summaries = gong_summaries.copy()
     gong_dates = pd.to_datetime(gong_summaries[date_col], errors="coerce")
@@ -174,44 +215,52 @@ def _supplement_meetings_from_gong(
 
     new_rows = []
     for _, gc in gong_summaries.iterrows():
-        rep = None
-        if email_col and pd.notna(gc.get(email_col)):
-            rep = _EMAIL_TO_REP.get(str(gc[email_col]).strip().lower())
-        if rep is None and name_col and pd.notna(gc.get(name_col)):
-            name = str(gc[name_col]).strip()
-            if name in REPS_IN_SCOPE:
-                rep = name
-        if rep is None:
-            continue
-
         gong_date = gc["_gong_date"]
         if pd.isna(gong_date):
             continue
 
-        title = str(gc.get("title", "Call"))
-        date_key = (rep, str(gong_date.date()))
+        # Resolve all attending reps
+        if attendees_col:
+            reps = _resolve_attendees(gc.get(attendees_col))
+        else:
+            reps = []
+            if email_col and pd.notna(gc.get(email_col)):
+                rep = _EMAIL_TO_REP.get(str(gc[email_col]).strip().lower())
+                if rep:
+                    reps.append(rep)
+            if not reps and name_col and pd.notna(gc.get(name_col)):
+                name = str(gc[name_col]).strip()
+                if name in REPS_IN_SCOPE:
+                    reps.append(name)
 
-        # Check if this Gong call fuzzy-matches any existing meeting
-        already_exists = False
-        for existing_title in existing_titles.get(date_key, []):
-            if _titles_match(title, existing_title):
-                already_exists = True
-                break
-        if already_exists:
+        if not reps:
             continue
 
-        new_rows.append({
-            "meeting_start_time": gong_date,
-            "hubspot_owner_name": rep,
-            "meeting_name": f"[Gong] {title}",
-            "company_name": gc.get("external_participants", ""),
-            "meeting_outcome": "Completed",
-            "meeting_source": "Gong",
-        })
-        existing_titles.setdefault(date_key, []).append(f"[Gong] {title}")
+        title = str(gc.get("title", "Call"))
+
+        for rep in reps:
+            date_key = (rep, str(gong_date.date()))
+
+            already_exists = False
+            for existing_title in existing_titles.get(date_key, []):
+                if _titles_match(title, existing_title):
+                    already_exists = True
+                    break
+            if already_exists:
+                continue
+
+            new_rows.append({
+                "meeting_start_time": gong_date,
+                "hubspot_owner_name": rep,
+                "meeting_name": f"[Gong] {title}",
+                "company_name": gc.get("external_participants", ""),
+                "meeting_outcome": "Completed",
+                "meeting_source": "Gong",
+            })
+            existing_titles.setdefault(date_key, []).append(f"[Gong] {title}")
 
     if new_rows:
-        logger.info("Gong supplementation: adding %d meetings for non-owner reps.", len(new_rows))
+        logger.info("Gong supplementation: adding %d meetings from attendees.", len(new_rows))
         meetings = pd.concat([meetings, pd.DataFrame(new_rows)], ignore_index=True)
     return meetings
 
