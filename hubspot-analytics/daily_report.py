@@ -343,7 +343,7 @@ def load_data():
     raw = read_all_tabs_standalone()
 
     logger.info("Normalizing...")
-    hubspot_tabs = ("deals", "meetings", "calls", "tickets", "emails", "notes", "new_pipeline")
+    hubspot_tabs = ("deals", "meetings", "calls", "tickets", "emails", "notes", "new_pipeline", "pre_order_support")
     norm = {}
     for k, v in raw.items():
         if k in hubspot_tabs:
@@ -355,7 +355,7 @@ def load_data():
     uid_map = build_uid_map_from_meetings(norm.get("meetings", pd.DataFrame()))
 
     logger.info("Applying owner mappings...")
-    for tab_type in ("deals", "meetings", "calls", "tickets", "emails", "notes", "new_pipeline"):
+    for tab_type in ("deals", "meetings", "calls", "tickets", "emails", "notes", "new_pipeline", "pre_order_support"):
         if tab_type in norm and not norm[tab_type].empty:
             norm[tab_type] = apply_owner_mapping(norm[tab_type], uid_map, tab_type)
 
@@ -397,13 +397,31 @@ def load_data():
     # Note: Conference calls are NOT reclassified as meetings.
     # Real meetings come from HubSpot (Completed) + Gong AI Summaries (Conference direction).
 
+    # Merge Pre Order Support (new estimate tickets) into the tickets dataset.
+    # Old estimates come from the Tickets tab (pipeline != "Sample Kit").
+    # New estimates (2+ weeks ago onwards) come from the Pre Order Support tab.
+    tickets_df = apply_activity_filters(norm.get("tickets", pd.DataFrame()))
+    pre_order_df = apply_activity_filters(norm.get("pre_order_support", pd.DataFrame()))
+    if not pre_order_df.empty:
+        # Tag Pre Order Support rows so _split_tickets knows they're estimates
+        pre_order_df = pre_order_df.copy()
+        pre_order_df["_source"] = "pre_order_support"
+        logger.info("Merging %d Pre Order Support rows into tickets.", len(pre_order_df))
+        # Ensure both DataFrames have the key columns before concat
+        for col in ("created_date", "hubspot_owner_name", "pipeline"):
+            if col not in tickets_df.columns and not tickets_df.empty:
+                tickets_df[col] = pd.NaT if col == "created_date" else ""
+            if col not in pre_order_df.columns:
+                pre_order_df[col] = pd.NaT if col == "created_date" else ""
+        tickets_df = pd.concat([tickets_df, pre_order_df], ignore_index=True)
+
     return {
         "deals": apply_deal_filters(norm.get("deals", pd.DataFrame())),
         "meetings": completed_meetings,
         "calls": calls,
         "emails": apply_activity_filters(norm.get("emails", pd.DataFrame())),
         "notes": apply_activity_filters(norm.get("notes", pd.DataFrame())),
-        "tickets": apply_activity_filters(norm.get("tickets", pd.DataFrame())),
+        "tickets": tickets_df,
         "gong_ai_summaries": norm.get("gong_ai_summaries", pd.DataFrame()),
     }
 
@@ -428,24 +446,41 @@ def _filter_rep(df: pd.DataFrame, rep_name: str) -> pd.DataFrame:
 
 
 def _split_tickets(tickets_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Split tickets into Estimates and Sample Kits based on the pipeline column.
+    """Split tickets into Estimates and Sample Kits.
 
-    Pipeline values:
-      - "Pricing / Estimate Request(s)" → estimates
-      - "Sample Kit" → sample kits
+    Sources:
+      - Old Tickets tab: pipeline "Pricing / Estimate Request(s)" → estimates,
+        pipeline containing "Sample" → sample kits.
+      - Pre Order Support tab (tagged with _source="pre_order_support") → always estimates.
     Tickets with no pipeline or unknown pipeline go into estimates as fallback.
     """
     if tickets_df.empty:
         return pd.DataFrame(), pd.DataFrame()
 
-    pipeline_col = "pipeline" if "pipeline" in tickets_df.columns else None
-    if pipeline_col is None:
-        return tickets_df, pd.DataFrame()
+    # Pre Order Support rows are always estimates
+    source_col = "_source" if "_source" in tickets_df.columns else None
+    if source_col:
+        pre_order_mask = tickets_df[source_col] == "pre_order_support"
+    else:
+        pre_order_mask = pd.Series(False, index=tickets_df.index)
 
-    pipeline_lower = tickets_df[pipeline_col].astype(str).str.strip().str.lower()
-    sample_mask = pipeline_lower.str.contains("sample", na=False)
-    estimates = tickets_df[~sample_mask]
-    sample_kits = tickets_df[sample_mask]
+    # Split the old Tickets-tab rows by pipeline
+    old_tickets = tickets_df[~pre_order_mask]
+    pipeline_col = "pipeline" if "pipeline" in old_tickets.columns else None
+
+    if pipeline_col is not None and not old_tickets.empty:
+        pipeline_lower = old_tickets[pipeline_col].astype(str).str.strip().str.lower()
+        sample_mask = pipeline_lower.str.contains("sample", na=False)
+        old_estimates = old_tickets[~sample_mask]
+        sample_kits = old_tickets[sample_mask]
+    else:
+        old_estimates = old_tickets
+        sample_kits = pd.DataFrame()
+
+    # Combine old estimates + all Pre Order Support rows
+    pre_order_estimates = tickets_df[pre_order_mask]
+    estimates = pd.concat([old_estimates, pre_order_estimates], ignore_index=True)
+
     return estimates, sample_kits
 
 

@@ -30,6 +30,7 @@ DEFAULT_TABS: dict[str, str] = {
     "emails": "Emails",
     "notes": "Notes",
     "new_pipeline": "New Pipeline",
+    "pre_order_support": "Pre Order Support",
     "gong_ai_summaries": "Gong AI Summaries",
     "gong_calls": "Gong Calls",
     "gong_users": "Gong Users",
