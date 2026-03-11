@@ -71,6 +71,13 @@ COLUMN_ALIASES: dict[str, str] = {
     "deal_name": "deal_name",
     # Tickets
     "first_name_ticket_owner": "ticket_owner_first_name",
+    # Pre Order Support
+    "object_create_date_time": "created_date",
+    "type_of_pre_order_support": "ticket_type",
+    "pre_order_support_request_pipeline": "pipeline",
+    "pre_order_support_request_pipeline_stage": "ticket_status",
+    "estimate_number": "ticket_name",
+    "record_id": "ticket_id",
 }
 
 DATE_COLUMNS = {
@@ -206,6 +213,13 @@ def apply_owner_mapping(df: pd.DataFrame, uid_map: dict[str, str], tab_type: str
         first = df.get("first_name", pd.Series("", index=df.index)).fillna("").astype(str).str.strip()
         last = df.get("last_name", pd.Series("", index=df.index)).fillna("").astype(str).str.strip()
         df["hubspot_owner_name"] = (first + " " + last).str.strip()
+
+    elif tab_type == "pre_order_support":
+        # Owner column contains the rep's full name directly (e.g. "Brad Sherman")
+        if "owner" in df.columns:
+            df["hubspot_owner_name"] = df["owner"].fillna("").astype(str).str.strip()
+        else:
+            df["hubspot_owner_name"] = ""
 
     elif tab_type == "new_pipeline":
         # New Pipeline has First name/Last name columns for deal owner
