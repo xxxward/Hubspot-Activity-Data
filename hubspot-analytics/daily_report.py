@@ -1127,7 +1127,10 @@ def main():
     # Mountain Time hour is outside the 4-8 PM window (target is 4:30 PM).
     # Note: GitHub Actions cron can be delayed 1-3 hours, so the window
     # must be wide enough to accommodate late runs.
-    if args.test is None and not args.test_all and not (16 <= now_mst.hour <= 20):
+    # Skip this guard for manual workflow_dispatch runs so production
+    # runs triggered via the GitHub UI always execute.
+    is_manual_run = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+    if not is_manual_run and args.test is None and not args.test_all and not (16 <= now_mst.hour <= 20):
         logger.info(
             "Current Mountain Time is %s — outside 4-8 PM window, skipping.",
             now_mst.strftime("%I:%M %p %Z"),
