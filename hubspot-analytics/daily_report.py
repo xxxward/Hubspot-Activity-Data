@@ -1123,20 +1123,6 @@ def main():
     # Today in Mountain Time (MST/MDT depending on DST)
     now_mst = datetime.now(MST)
 
-    # Guard against double-send: two cron entries cover DST, so skip if
-    # Mountain Time hour is outside the 4-8 PM window (target is 4:30 PM).
-    # Note: GitHub Actions cron can be delayed 1-3 hours, so the window
-    # must be wide enough to accommodate late runs.
-    # Skip this guard for manual workflow_dispatch runs so production
-    # runs triggered via the GitHub UI always execute.
-    is_manual_run = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
-    if not is_manual_run and args.test is None and not args.test_all and not (16 <= now_mst.hour <= 20):
-        logger.info(
-            "Current Mountain Time is %s — outside 4-8 PM window, skipping.",
-            now_mst.strftime("%I:%M %p %Z"),
-        )
-        return
-
     today = now_mst.date()
     today_ts = pd.Timestamp(today)
     today_str = today.strftime("%A, %B %d, %Y")
@@ -1226,7 +1212,7 @@ def main():
         else:
             send_email(to=REP_EMAILS[rep], subject=subject, html_body=html, cc=MANAGER_EMAILS)
 
-    # 8. Send executive summary to managers (Alex + Kyle)
+    # 8. Send executive summary to managers (TO: xward, CC: Alex + Kyle)
     if not test_mode or test_all:
         manager_subject = f"Team Daily Wins — {today.strftime('%A, %b %d')}"
         if test_all:
@@ -1235,8 +1221,8 @@ def main():
         if test_all:
             send_email(to=preview_to, subject=manager_subject, html_body=manager_html)
         else:
-            for manager_email in MANAGER_EMAILS:
-                send_email(to=manager_email, subject=manager_subject, html_body=manager_html)
+            manager_cc = [e for e in MANAGER_EMAILS if e != MANAGER_EMAILS[0]]
+            send_email(to=MANAGER_EMAILS[0], subject=manager_subject, html_body=manager_html, cc=manager_cc)
 
     logger.info("=== Daily Report Complete ===")
 
