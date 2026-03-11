@@ -1,12 +1,11 @@
-name: Daily Activity Report (4:30 PM MST)
+name: Daily Activity Report
 
 on:
   schedule:
-    # 4:30 PM Mountain Time year-round (both entries cover DST transitions):
-    #   22:30 UTC = 4:30 PM MDT (Mar–Nov)  — runs Mon-Fri MDT
-    #   23:30 UTC = 4:30 PM MST (Nov–Mar)  — runs Mon-Fri MST
+    # Single trigger: 22:30 UTC = 4:30 PM MDT (Mar–Nov) / 3:30 PM MST (Nov–Mar)
+    # One entry = no double-sends. Shifts by 1 hr with DST — acceptable trade-off.
     - cron: "30 22 * * 1-5"
-    - cron: "30 23 * * 1-5"
+
   workflow_dispatch:
     inputs:
       mode:
