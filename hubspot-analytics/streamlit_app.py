@@ -832,6 +832,19 @@ with st.sidebar.expander("🔧 Debug: Meeting Sources"):
     st.markdown(f"**Gong Calls**: {len(_gong_calls)} rows")
     if not _gong_calls.empty and "direction" in _gong_calls.columns:
         st.markdown(f"  Direction: {_gong_calls['direction'].value_counts().to_dict()}")
+    # call_id diagnostics — detect type/format mismatches
+    if not _gong_summ.empty and "call_id" in _gong_summ.columns and not _gong_calls.empty and "call_id" in _gong_calls.columns:
+        _s_ids = _gong_summ["call_id"].astype(str).str.strip()
+        _c_ids = _gong_calls["call_id"].astype(str).str.strip()
+        _s_set = set(_s_ids)
+        _c_set = set(_c_ids)
+        _overlap = len(_s_set & _c_set)
+        st.markdown(f"**call_id match**: {_overlap} of {len(_s_set)} summaries match {len(_c_set)} calls")
+        st.markdown(f"  Summaries dtype: `{_gong_summ['call_id'].dtype}`, sample: `{list(_gong_summ['call_id'].head(2))}`")
+        st.markdown(f"  Calls dtype: `{_gong_calls['call_id'].dtype}`, sample: `{list(_gong_calls['call_id'].head(2))}`")
+        if _overlap == 0:
+            st.markdown("  **⚠️ ZERO OVERLAP — call_id format mismatch!**")
+            st.markdown(f"  As str: summaries=`{list(_s_ids.head(2))}`, calls=`{list(_c_ids.head(2))}`")
     # Meeting source breakdown in current view
     if not fm.empty and "meeting_source" in fm.columns:
         source_counts = fm["meeting_source"].fillna("HubSpot").value_counts().to_dict()

@@ -246,6 +246,25 @@ def _filter_conference_calls(
     conference_ids = set(call_dirs.loc[call_dirs["_dir"] == "conference", "call_id"])
     logger.info("Conference call_ids: %d", len(conference_ids))
 
+    # Diagnostic: show sample call_ids from each source to detect mismatches
+    sample_summ = list(gong_ai_summaries["call_id"].head(3))
+    sample_calls = list(call_dirs["call_id"].head(3))
+    sample_conf = list(conference_ids)[:3] if conference_ids else []
+    logger.info(
+        "call_id samples — AI Summaries: %s (dtype=%s), Calls: %s (dtype=%s), Conference: %s",
+        sample_summ, gong_ai_summaries["call_id"].dtype,
+        sample_calls, call_dirs["call_id"].dtype,
+        sample_conf,
+    )
+
+    # Check for overlap
+    summaries_set = set(gong_ai_summaries["call_id"])
+    overlap = summaries_set & conference_ids
+    logger.info(
+        "call_id overlap: %d summaries, %d conference, %d matched.",
+        len(summaries_set), len(conference_ids), len(overlap),
+    )
+
     before = len(gong_ai_summaries)
     result = gong_ai_summaries[gong_ai_summaries["call_id"].isin(conference_ids)].copy()
     logger.info("Gong direction filter: %d -> %d entries (Conference only).", before, len(result))
