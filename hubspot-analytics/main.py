@@ -217,7 +217,24 @@ def _supplement_meetings_from_gong(
       "Call with Buckeye Relief - Ben Begley" (Gong AI Summary)
     """
     if gong_ai_summaries.empty:
+        logger.warning("Gong supplementation: AI summaries sheet is empty.")
         return meetings
+
+    logger.info(
+        "Gong supplementation: starting with %d AI summaries, %d existing meetings.",
+        len(gong_ai_summaries), len(meetings),
+    )
+
+    # Log all Gong AI summary titles for diagnostics
+    title_col = next((c for c in ("title",) if c in gong_ai_summaries.columns), None)
+    if title_col:
+        for _, row in gong_ai_summaries.iterrows():
+            logger.debug(
+                "  Gong AI summary: call_id=%s title=%r date=%s rep_email=%s",
+                row.get("call_id", "?"), row.get(title_col, "?"),
+                row.get("date", row.get("started", row.get("scheduled", "?"))),
+                row.get("rep_email", row.get("primary_rep_email", "?")),
+            )
 
     # Filter AI summaries to only Conference-type calls (actual meetings)
     if gong_calls is not None and not gong_calls.empty and "call_id" in gong_ai_summaries.columns and "call_id" in gong_calls.columns:
@@ -226,14 +243,43 @@ def _supplement_meetings_from_gong(
             # Build call_id -> direction lookup from gong_calls
             call_directions = gong_calls[["call_id", direction_col]].drop_duplicates("call_id")
             call_directions["_direction_lower"] = call_directions[direction_col].astype(str).str.strip().str.lower()
+
+            # Log direction distribution for diagnostics
+            direction_counts = call_directions["_direction_lower"].value_counts()
+            logger.info("Gong Calls direction distribution: %s", direction_counts.to_dict())
+
             conference_ids = set(call_directions.loc[call_directions["_direction_lower"] == "conference", "call_id"])
             before = len(gong_ai_summaries)
+
+            # Log which summaries are being dropped by direction filter
+            if "call_id" in gong_ai_summaries.columns:
+                dropped = gong_ai_summaries[~gong_ai_summaries["call_id"].isin(conference_ids)]
+                if not dropped.empty and title_col:
+                    for _, row in dropped.iterrows():
+                        cid = row.get("call_id", "?")
+                        dir_val = call_directions.loc[
+                            call_directions["call_id"] == cid, "_direction_lower"
+                        ].values
+                        dir_str = dir_val[0] if len(dir_val) > 0 else "NOT IN GONG CALLS"
+                        logger.info(
+                            "  Gong direction filter DROPPED: call_id=%s title=%r direction=%s",
+                            cid, row.get(title_col, "?"), dir_str,
+                        )
+
             gong_ai_summaries = gong_ai_summaries[gong_ai_summaries["call_id"].isin(conference_ids)]
             logger.info("Gong direction filter: %d -> %d entries (Conference only).", before, len(gong_ai_summaries))
             if gong_ai_summaries.empty:
                 return meetings
     else:
-        logger.warning("Cannot filter Gong by direction — missing call_id or gong_calls. Skipping supplementation.")
+        logger.warning(
+            "Cannot filter Gong by direction — missing call_id or gong_calls. "
+            "gong_calls present=%s, gong_calls empty=%s, "
+            "call_id in summaries=%s, call_id in calls=%s. Skipping supplementation.",
+            gong_calls is not None,
+            gong_calls.empty if gong_calls is not None else "N/A",
+            "call_id" in gong_ai_summaries.columns,
+            "call_id" in gong_calls.columns if gong_calls is not None else "N/A",
+        )
         return meetings
 
     # Detect the all_attendees column (snake_case normalized)
@@ -305,6 +351,12 @@ def _supplement_meetings_from_gong(
                     seen.add(extra_rep)
 
         if not reps:
+            logger.info(
+                "  Gong supplementation: NO REP resolved for call_id=%s title=%r email=%s name=%s",
+                gc.get("call_id", "?"), gc.get("title", "?"),
+                gc.get(email_col, "?") if email_col else "N/A",
+                gc.get(name_col, "?") if name_col else "N/A",
+            )
             continue
 
         title = str(gc.get("title", "Gong Call"))
@@ -314,13 +366,23 @@ def _supplement_meetings_from_gong(
 
             # Check if this Gong call fuzzy-matches any existing meeting for this rep+date
             already_exists = False
+            matched_title = None
             for existing_title in existing_titles.get(date_key, []):
                 if _titles_match(title, existing_title):
                     already_exists = True
+                    matched_title = existing_title
                     break
             if already_exists:
+                logger.info(
+                    "  Gong supplementation: DEDUP SKIP call_id=%s title=%r matched=%r for %s on %s",
+                    gc.get("call_id", "?"), title, matched_title, rep, gong_date.date(),
+                )
                 continue
 
+            logger.info(
+                "  Gong supplementation: ADDING call_id=%s title=%r for %s on %s",
+                gc.get("call_id", "?"), title, rep, gong_date.date(),
+            )
             new_rows.append({
                 "meeting_start_time": gong_date,
                 "hubspot_owner_name": rep,
@@ -334,8 +396,98 @@ def _supplement_meetings_from_gong(
             # Add to existing so subsequent Gong entries also dedup against this one
             existing_titles.setdefault(date_key, []).append(f"[Gong] {title}")
 
+    # ── Fallback: supplement directly from gong_calls sheet ──
+    # Some Conference calls may exist in the Gong Calls sheet but NOT in
+    # AI Summaries (sync gap).  If gong_calls has a title and owner/rep
+    # column, create meeting entries for Conference calls we haven't
+    # already credited.
+    if gong_calls is not None and not gong_calls.empty:
+        gc_title_col = next((c for c in ("title", "call_title", "name") if c in gong_calls.columns), None)
+        gc_owner_col = next((c for c in ("owner_email", "owner", "rep_email", "host_email") if c in gong_calls.columns), None)
+        gc_name_col = next((c for c in ("owner_name", "host", "rep_name") if c in gong_calls.columns), None)
+        gc_date_col = next((c for c in ("started", "scheduled", "date") if c in gong_calls.columns), None)
+        gc_company_col = next((c for c in ("external_participants", "company", "account") if c in gong_calls.columns), None)
+        direction_col = next((c for c in ("direction",) if c in gong_calls.columns), None)
+
+        if gc_title_col and gc_date_col and direction_col:
+            # Only Conference calls
+            conf_mask = gong_calls[direction_col].astype(str).str.strip().str.lower() == "conference"
+            gc_conf = gong_calls[conf_mask].copy()
+
+            # Exclude call_ids we already processed from AI summaries
+            processed_call_ids = set(gong_ai_summaries["call_id"]) if "call_id" in gong_ai_summaries.columns else set()
+            if "call_id" in gc_conf.columns and processed_call_ids:
+                gc_conf = gc_conf[~gc_conf["call_id"].isin(processed_call_ids)]
+
+            if not gc_conf.empty:
+                logger.info(
+                    "Gong Calls fallback: %d Conference calls not in AI summaries. "
+                    "Columns available: title=%s, owner=%s, name=%s, date=%s, company=%s",
+                    len(gc_conf), gc_title_col, gc_owner_col, gc_name_col, gc_date_col, gc_company_col,
+                )
+
+            for _, gc_row in gc_conf.iterrows():
+                gc_date = pd.to_datetime(gc_row.get(gc_date_col), errors="coerce")
+                if pd.isna(gc_date):
+                    continue
+                if gc_date.tzinfo is not None:
+                    gc_date = gc_date.tz_localize(None)
+                gc_date = gc_date.normalize()
+
+                # Resolve rep
+                fallback_reps = []
+                fb_seen = set()
+                if gc_owner_col and pd.notna(gc_row.get(gc_owner_col)):
+                    email = str(gc_row[gc_owner_col]).strip().lower()
+                    if email in _EMAIL_TO_REP:
+                        name = _EMAIL_TO_REP[email]
+                        fallback_reps.append(name)
+                        fb_seen.add(name)
+                if not fallback_reps and gc_name_col and pd.notna(gc_row.get(gc_name_col)):
+                    name = str(gc_row[gc_name_col]).strip()
+                    if name in REPS_IN_SCOPE:
+                        fallback_reps.append(name)
+                        fb_seen.add(name)
+
+                if not fallback_reps:
+                    continue
+
+                fb_title = str(gc_row.get(gc_title_col, "Gong Call"))
+                fb_company = str(gc_row.get(gc_company_col, "")) if gc_company_col and pd.notna(gc_row.get(gc_company_col)) else ""
+
+                for fb_rep in fallback_reps:
+                    fb_date_key = (fb_rep, str(gc_date.date()))
+                    fb_already = False
+                    for et in existing_titles.get(fb_date_key, []):
+                        if _titles_match(fb_title, et):
+                            fb_already = True
+                            break
+                    if fb_already:
+                        continue
+
+                    logger.info(
+                        "  Gong Calls fallback: ADDING call_id=%s title=%r for %s on %s",
+                        gc_row.get("call_id", "?"), fb_title, fb_rep, gc_date.date(),
+                    )
+                    new_rows.append({
+                        "meeting_start_time": gc_date,
+                        "hubspot_owner_name": fb_rep,
+                        "meeting_name": f"[Gong] {fb_title}",
+                        "company_name": fb_company,
+                        "meeting_outcome": "Completed",
+                        "meeting_source": "Gong",
+                        "has_gong": True,
+                        "_counts_as_meeting": True,
+                    })
+                    existing_titles.setdefault(fb_date_key, []).append(f"[Gong] {fb_title}")
+        else:
+            logger.info(
+                "Gong Calls fallback: insufficient columns for fallback (title=%s, date=%s, direction=%s).",
+                gc_title_col, gc_date_col, direction_col,
+            )
+
     if new_rows:
-        logger.info("Gong supplementation: adding %d meetings from attendees.", len(new_rows))
+        logger.info("Gong supplementation: adding %d meetings total.", len(new_rows))
         meetings = pd.concat([meetings, pd.DataFrame(new_rows)], ignore_index=True)
     else:
         logger.info("Gong supplementation: no additional meetings to add.")
