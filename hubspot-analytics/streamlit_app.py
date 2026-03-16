@@ -825,26 +825,23 @@ with st.sidebar.expander("🔧 Debug: Date Diagnostics"):
         else:
             st.markdown(f"**{label}**: empty")
 
-with st.sidebar.expander("🔧 Debug: Gong Diagnostics"):
+with st.sidebar.expander("🔧 Debug: Meeting Sources"):
     _gong_summ = data.gong_ai_summaries if hasattr(data, "gong_ai_summaries") else pd.DataFrame()
     _gong_calls = data.gong_calls if hasattr(data, "gong_calls") else pd.DataFrame()
     st.markdown(f"**Gong AI Summaries**: {len(_gong_summ)} rows")
     st.markdown(f"**Gong Calls**: {len(_gong_calls)} rows")
-    if not _gong_summ.empty:
-        st.markdown(f"  Columns: {list(_gong_summ.columns)[:12]}")
-        if "title" in _gong_summ.columns:
-            st.markdown(f"  Sample titles: {_gong_summ['title'].head(5).tolist()}")
-    if not _gong_calls.empty:
-        st.markdown(f"  Columns: {list(_gong_calls.columns)[:12]}")
-        if "direction" in _gong_calls.columns:
-            st.markdown(f"  Direction distribution: {_gong_calls['direction'].value_counts().to_dict()}")
-    # Show Gong-sourced meetings in the filtered meeting data
+    if not _gong_calls.empty and "direction" in _gong_calls.columns:
+        st.markdown(f"  Direction: {_gong_calls['direction'].value_counts().to_dict()}")
+    # Meeting source breakdown in current view
     if not fm.empty and "meeting_source" in fm.columns:
-        gong_mtgs = fm[fm["meeting_source"] == "Gong"]
-        st.markdown(f"**Gong-supplemented meetings (in view)**: {len(gong_mtgs)}")
-        if not gong_mtgs.empty:
-            for _, r in gong_mtgs.iterrows():
-                st.markdown(f"  - {r.get('hubspot_owner_name', '?')}: {r.get('meeting_name', '?')} ({r.get('meeting_start_time', '?')})")
+        source_counts = fm["meeting_source"].fillna("HubSpot").value_counts().to_dict()
+        st.markdown(f"**Meetings in view**: {len(fm)} total")
+        for src, cnt in source_counts.items():
+            st.markdown(f"  - {src}: {cnt}")
+    elif not fm.empty:
+        st.markdown(f"**Meetings in view**: {len(fm)} (no source column)")
+    else:
+        st.markdown("**Meetings in view**: 0")
 
 
 # ════════════════════════════════════════════════════════════════════════
