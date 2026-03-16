@@ -222,6 +222,13 @@ def _supplement_meetings_from_gong(
     if gong_summaries.empty:
         return meetings
 
+    # Normalize call_id to string in both sheets to avoid type mismatches
+    gong_summaries = gong_summaries.copy()
+    gong_summaries["call_id"] = gong_summaries["call_id"].astype(str).str.strip()
+    if gong_calls is not None and not gong_calls.empty and "call_id" in gong_calls.columns:
+        gong_calls = gong_calls.copy()
+        gong_calls["call_id"] = gong_calls["call_id"].astype(str).str.strip()
+
     # Filter to only Conference-type calls (actual meetings, not phone calls)
     if gong_calls is not None and not gong_calls.empty and "call_id" in gong_summaries.columns and "call_id" in gong_calls.columns:
         direction_col = next((c for c in ("direction",) if c in gong_calls.columns), None)

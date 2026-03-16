@@ -236,6 +236,14 @@ def _supplement_meetings_from_gong(
                 row.get("rep_email", row.get("primary_rep_email", "?")),
             )
 
+    # Normalize call_id to string in both sheets to avoid type mismatches
+    # (one sheet may store as int/float, the other as string).
+    gong_ai_summaries = gong_ai_summaries.copy()
+    gong_ai_summaries["call_id"] = gong_ai_summaries["call_id"].astype(str).str.strip()
+    if gong_calls is not None and not gong_calls.empty and "call_id" in gong_calls.columns:
+        gong_calls = gong_calls.copy()
+        gong_calls["call_id"] = gong_calls["call_id"].astype(str).str.strip()
+
     # Filter AI summaries to only Conference-type calls (actual meetings)
     if gong_calls is not None and not gong_calls.empty and "call_id" in gong_ai_summaries.columns and "call_id" in gong_calls.columns:
         direction_col = next((c for c in ("direction",) if c in gong_calls.columns), None)
@@ -249,22 +257,18 @@ def _supplement_meetings_from_gong(
             logger.info("Gong Calls direction distribution: %s", direction_counts.to_dict())
 
             conference_ids = set(call_directions.loc[call_directions["_direction_lower"] == "conference", "call_id"])
-            before = len(gong_ai_summaries)
 
-            # Log which summaries are being dropped by direction filter
-            if "call_id" in gong_ai_summaries.columns:
-                dropped = gong_ai_summaries[~gong_ai_summaries["call_id"].isin(conference_ids)]
-                if not dropped.empty and title_col:
-                    for _, row in dropped.iterrows():
-                        cid = row.get("call_id", "?")
-                        dir_val = call_directions.loc[
-                            call_directions["call_id"] == cid, "_direction_lower"
-                        ].values
-                        dir_str = dir_val[0] if len(dir_val) > 0 else "NOT IN GONG CALLS"
-                        logger.info(
-                            "  Gong direction filter DROPPED: call_id=%s title=%r direction=%s",
-                            cid, row.get(title_col, "?"), dir_str,
-                        )
+            # Log call_id type info for diagnostics
+            sample_summary_ids = list(gong_ai_summaries["call_id"].head(3))
+            sample_calls_ids = list(call_directions["call_id"].head(3))
+            logger.info(
+                "call_id type check: summaries=%s (samples: %s), calls=%s (samples: %s), conference_ids count=%d",
+                gong_ai_summaries["call_id"].dtype, sample_summary_ids,
+                call_directions["call_id"].dtype, sample_calls_ids,
+                len(conference_ids),
+            )
+
+            before = len(gong_ai_summaries)
 
             gong_ai_summaries = gong_ai_summaries[gong_ai_summaries["call_id"].isin(conference_ids)]
             logger.info("Gong direction filter: %d -> %d entries (Conference only).", before, len(gong_ai_summaries))
