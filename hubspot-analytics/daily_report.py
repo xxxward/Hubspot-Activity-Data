@@ -324,8 +324,76 @@ def _supplement_meetings_from_gong(
             })
             existing_titles.setdefault(date_key, []).append(f"[Gong] {title}")
 
+    # ── Fallback: supplement directly from gong_calls sheet ──
+    # Some Conference calls may exist in the Gong Calls sheet but NOT in
+    # AI Summaries (sync gap).
+    if gong_calls is not None and not gong_calls.empty:
+        gc_title_col = next((c for c in ("title", "call_title", "name") if c in gong_calls.columns), None)
+        gc_owner_col = next((c for c in ("owner_email", "owner", "rep_email", "host_email") if c in gong_calls.columns), None)
+        gc_name_col = next((c for c in ("owner_name", "host", "rep_name") if c in gong_calls.columns), None)
+        gc_date_col = next((c for c in ("started", "scheduled", "date") if c in gong_calls.columns), None)
+        gc_company_col = next((c for c in ("external_participants", "company", "account") if c in gong_calls.columns), None)
+        direction_col = next((c for c in ("direction",) if c in gong_calls.columns), None)
+
+        if gc_title_col and gc_date_col and direction_col:
+            conf_mask = gong_calls[direction_col].astype(str).str.strip().str.lower() == "conference"
+            gc_conf = gong_calls[conf_mask].copy()
+
+            processed_call_ids = set(gong_summaries["call_id"]) if "call_id" in gong_summaries.columns else set()
+            if "call_id" in gc_conf.columns and processed_call_ids:
+                gc_conf = gc_conf[~gc_conf["call_id"].isin(processed_call_ids)]
+
+            if not gc_conf.empty:
+                logger.info("Gong Calls fallback: %d Conference calls not in AI summaries.", len(gc_conf))
+
+            for _, gc_row in gc_conf.iterrows():
+                gc_date = pd.to_datetime(gc_row.get(gc_date_col), errors="coerce")
+                if pd.isna(gc_date):
+                    continue
+                if gc_date.tzinfo is not None:
+                    gc_date = gc_date.tz_localize(None)
+                gc_date = gc_date.normalize()
+
+                fallback_reps = []
+                fb_seen = set()
+                if gc_owner_col and pd.notna(gc_row.get(gc_owner_col)):
+                    email = str(gc_row[gc_owner_col]).strip().lower()
+                    if email in _EMAIL_TO_REP:
+                        fallback_reps.append(_EMAIL_TO_REP[email])
+                        fb_seen.add(_EMAIL_TO_REP[email])
+                if not fallback_reps and gc_name_col and pd.notna(gc_row.get(gc_name_col)):
+                    name = str(gc_row[gc_name_col]).strip()
+                    if name in REPS_IN_SCOPE:
+                        fallback_reps.append(name)
+
+                if not fallback_reps:
+                    continue
+
+                fb_title = str(gc_row.get(gc_title_col, "Gong Call"))
+                fb_company = str(gc_row.get(gc_company_col, "")) if gc_company_col and pd.notna(gc_row.get(gc_company_col)) else ""
+
+                for fb_rep in fallback_reps:
+                    fb_date_key = (fb_rep, str(gc_date.date()))
+                    fb_already = False
+                    for et in existing_titles.get(fb_date_key, []):
+                        if _titles_match(fb_title, et):
+                            fb_already = True
+                            break
+                    if fb_already:
+                        continue
+
+                    new_rows.append({
+                        "meeting_start_time": gc_date,
+                        "hubspot_owner_name": fb_rep,
+                        "meeting_name": f"[Gong] {fb_title}",
+                        "company_name": fb_company,
+                        "meeting_outcome": "Completed",
+                        "meeting_source": "Gong",
+                    })
+                    existing_titles.setdefault(fb_date_key, []).append(f"[Gong] {fb_title}")
+
     if new_rows:
-        logger.info("Gong supplementation: adding %d meetings from attendees.", len(new_rows))
+        logger.info("Gong supplementation: adding %d meetings total.", len(new_rows))
         meetings = pd.concat([meetings, pd.DataFrame(new_rows)], ignore_index=True)
     return meetings
 
