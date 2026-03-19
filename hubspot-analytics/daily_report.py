@@ -389,9 +389,14 @@ def _build_calls_from_gong(
     gong_ai_summaries: pd.DataFrame,
     gong_calls: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Build calls table exclusively from Gong (non-conference direction)."""
+    """Build calls table exclusively from Gong (non-conference direction).
+
+    Dedup by call_id only — each unique Gong call is a distinct activity.
+    No fuzzy title matching (a rep can make multiple calls to the same
+    company in one day and each one counts).
+    """
     call_rows: list[dict] = []
-    seen_keys: dict[tuple[str, str], list[str]] = {}
+    seen_call_ids: set[str] = set()
 
     if not gong_ai_summaries.empty and "call_id" in gong_ai_summaries.columns:
         gong_ai_summaries = gong_ai_summaries.copy()
@@ -426,14 +431,16 @@ def _build_calls_from_gong(
                             gong_date = row["_gong_date"]
                             if pd.isna(gong_date):
                                 continue
+                            cid = str(row.get("call_id", ""))
                             reps = _resolve_reps(row, email_col, name_col, attendees_col)
                             if not reps:
                                 continue
                             title = str(row.get("title", "Gong Call"))
                             for rep in reps:
-                                date_key = (rep, str(gong_date.date()))
-                                if any(_titles_match(title, et) for et in seen_keys.get(date_key, [])):
+                                dedup_key = f"{cid}:{rep}"
+                                if dedup_key in seen_call_ids:
                                     continue
+                                seen_call_ids.add(dedup_key)
                                 call_rows.append({
                                     "activity_date": gong_date,
                                     "hubspot_owner_name": rep,
@@ -441,7 +448,6 @@ def _build_calls_from_gong(
                                     "company_name": row.get("external_participants", ""),
                                     "call_source": "Gong",
                                 })
-                                seen_keys.setdefault(date_key, []).append(title)
 
     # Step 2: Gong Calls fallback
     if gong_calls is not None and not gong_calls.empty:
@@ -466,15 +472,17 @@ def _build_calls_from_gong(
                 if gc_date.tzinfo is not None:
                     gc_date = gc_date.tz_localize(None)
                 gc_date = gc_date.normalize()
+                cid = str(gc_row.get("call_id", ""))
                 fb_reps = _resolve_reps(gc_row, gc_email_col, gc_name_col, None)
                 if not fb_reps:
                     continue
                 fb_title = str(gc_row.get(gc_title_col, "Gong Call"))
                 fb_company = str(gc_row.get(gc_company_col, "")) if gc_company_col and pd.notna(gc_row.get(gc_company_col)) else ""
                 for fb_rep in fb_reps:
-                    fb_key = (fb_rep, str(gc_date.date()))
-                    if any(_titles_match(fb_title, et) for et in seen_keys.get(fb_key, [])):
+                    dedup_key = f"{cid}:{fb_rep}"
+                    if dedup_key in seen_call_ids:
                         continue
+                    seen_call_ids.add(dedup_key)
                     call_rows.append({
                         "activity_date": gc_date,
                         "hubspot_owner_name": fb_rep,
@@ -482,7 +490,6 @@ def _build_calls_from_gong(
                         "company_name": fb_company,
                         "call_source": "Gong",
                     })
-                    seen_keys.setdefault(fb_key, []).append(fb_title)
 
     if call_rows:
         result = pd.DataFrame(call_rows)

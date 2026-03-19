@@ -490,9 +490,13 @@ def _build_calls_from_gong(
     Non-conference Gong calls (outbound, inbound, etc.) become call rows.
     Uses AI Summaries as the primary source (enriched data), with the
     Gong Calls sheet as fallback for calls missing from AI Summaries.
+
+    Deduplication is by call_id only — each unique Gong call is a distinct
+    activity.  No fuzzy title matching (unlike meetings), because a rep can
+    legitimately make multiple calls to the same company in one day.
     """
     call_rows: list[dict] = []
-    seen_keys: dict[tuple[str, str], list[str]] = {}  # (rep, date) -> [titles]
+    seen_call_ids: set[str] = set()  # Dedup by call_id, not title
 
     # ── Step 0: Normalize call_id to string ──
     if not gong_ai_summaries.empty and "call_id" in gong_ai_summaries.columns:
@@ -530,24 +534,24 @@ def _build_calls_from_gong(
                             gong_date = row["_gong_date"]
                             if pd.isna(gong_date):
                                 continue
+                            cid = str(row.get("call_id", ""))
                             reps = _resolve_reps(row, email_col, name_col, attendees_col)
                             if not reps:
                                 continue
                             title = str(row.get("title", "Gong Call"))
                             for rep in reps:
-                                date_key = (rep, str(gong_date.date()))
-                                already = any(_titles_match(title, et) for et in seen_keys.get(date_key, []))
-                                if already:
+                                dedup_key = f"{cid}:{rep}"
+                                if dedup_key in seen_call_ids:
                                     continue
+                                seen_call_ids.add(dedup_key)
                                 call_rows.append({
                                     "activity_date": gong_date,
                                     "hubspot_owner_name": rep,
                                     "call_title": f"[Gong] {title}",
                                     "company_name": row.get("external_participants", ""),
                                     "call_source": "Gong",
-                                    "call_id": row.get("call_id", ""),
+                                    "call_id": cid,
                                 })
-                                seen_keys.setdefault(date_key, []).append(title)
 
     logger.info("Gong calls (AI Summaries): %d call rows.", len(call_rows))
 
@@ -578,6 +582,7 @@ def _build_calls_from_gong(
                     gc_date = gc_date.tz_localize(None)
                 gc_date = gc_date.normalize()
 
+                cid = str(gc_row.get("call_id", ""))
                 fb_reps = _resolve_reps(gc_row, gc_email_col, gc_name_col, None)
                 if not fb_reps:
                     continue
@@ -586,18 +591,18 @@ def _build_calls_from_gong(
                 fb_company = str(gc_row.get(gc_company_col, "")) if gc_company_col and pd.notna(gc_row.get(gc_company_col)) else ""
 
                 for fb_rep in fb_reps:
-                    fb_key = (fb_rep, str(gc_date.date()))
-                    if any(_titles_match(fb_title, et) for et in seen_keys.get(fb_key, [])):
+                    dedup_key = f"{cid}:{fb_rep}"
+                    if dedup_key in seen_call_ids:
                         continue
+                    seen_call_ids.add(dedup_key)
                     call_rows.append({
                         "activity_date": gc_date,
                         "hubspot_owner_name": fb_rep,
                         "call_title": f"[Gong] {fb_title}",
                         "company_name": fb_company,
                         "call_source": "Gong",
-                        "call_id": gc_row.get("call_id", ""),
+                        "call_id": cid,
                     })
-                    seen_keys.setdefault(fb_key, []).append(fb_title)
                     fallback_count += 1
 
             if fallback_count:
