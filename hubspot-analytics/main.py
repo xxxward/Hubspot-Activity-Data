@@ -7,7 +7,11 @@ don't already match a Gong call (i.e., meetings Gong wasn't recording).
 
 Gong data comes from Google Sheets (synced via Apps Script), not the Gong API.
 Tasks are excluded from activity metrics.
-Calls stay as calls; meetings stay as meetings (no cross-conversion).
+
+Both meetings AND calls are sourced from Gong exclusively:
+  - Meetings = Gong Conference-direction calls
+  - Calls = Gong non-Conference-direction calls (outbound, inbound, etc.)
+HubSpot Completed meetings are added as fallback only when Gong didn't record them.
 """
 
 import logging
@@ -476,6 +480,138 @@ def _build_meetings_gong_primary(
     return result
 
 
+def _build_calls_from_gong(
+    gong_ai_summaries: pd.DataFrame,
+    gong_calls: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """
+    Build the calls table exclusively from Gong data.
+
+    Non-conference Gong calls (outbound, inbound, etc.) become call rows.
+    Uses AI Summaries as the primary source (enriched data), with the
+    Gong Calls sheet as fallback for calls missing from AI Summaries.
+    """
+    call_rows: list[dict] = []
+    seen_keys: dict[tuple[str, str], list[str]] = {}  # (rep, date) -> [titles]
+
+    # ── Step 0: Normalize call_id to string ──
+    if not gong_ai_summaries.empty and "call_id" in gong_ai_summaries.columns:
+        gong_ai_summaries = gong_ai_summaries.copy()
+        gong_ai_summaries["call_id"] = gong_ai_summaries["call_id"].astype(str).str.strip()
+    if gong_calls is not None and not gong_calls.empty and "call_id" in gong_calls.columns:
+        gong_calls = gong_calls.copy()
+        gong_calls["call_id"] = gong_calls["call_id"].astype(str).str.strip()
+
+    # ── Step 1: Non-conference AI Summaries (PRIMARY — enriched data) ──
+    if not gong_ai_summaries.empty and gong_calls is not None and not gong_calls.empty:
+        if "call_id" in gong_ai_summaries.columns and "call_id" in gong_calls.columns:
+            direction_col = next((c for c in ("direction",) if c in gong_calls.columns), None)
+            if direction_col:
+                call_dirs = gong_calls[["call_id", direction_col]].drop_duplicates("call_id")
+                call_dirs["_dir"] = call_dirs[direction_col].astype(str).str.strip().str.lower()
+                non_conf_ids = set(call_dirs.loc[call_dirs["_dir"] != "conference", "call_id"])
+
+                gong_non_conf = gong_ai_summaries[gong_ai_summaries["call_id"].isin(non_conf_ids)].copy()
+                logger.info("Gong calls from AI Summaries: %d non-conference entries.", len(gong_non_conf))
+
+                if not gong_non_conf.empty:
+                    email_col = next((c for c in ("rep_email", "primary_rep_email") if c in gong_non_conf.columns), None)
+                    name_col = next((c for c in ("rep_name", "primary_rep") if c in gong_non_conf.columns), None)
+                    date_col = next((c for c in ("date", "started", "scheduled") if c in gong_non_conf.columns), None)
+                    attendees_col = next((c for c in ("all_attendees",) if c in gong_non_conf.columns), None)
+
+                    if date_col and (email_col or name_col):
+                        gong_dates = pd.to_datetime(gong_non_conf[date_col], errors="coerce")
+                        if gong_dates.dt.tz is not None:
+                            gong_dates = gong_dates.dt.tz_localize(None)
+                        gong_non_conf["_gong_date"] = gong_dates.dt.normalize()
+
+                        for _, row in gong_non_conf.iterrows():
+                            gong_date = row["_gong_date"]
+                            if pd.isna(gong_date):
+                                continue
+                            reps = _resolve_reps(row, email_col, name_col, attendees_col)
+                            if not reps:
+                                continue
+                            title = str(row.get("title", "Gong Call"))
+                            for rep in reps:
+                                date_key = (rep, str(gong_date.date()))
+                                already = any(_titles_match(title, et) for et in seen_keys.get(date_key, []))
+                                if already:
+                                    continue
+                                call_rows.append({
+                                    "activity_date": gong_date,
+                                    "hubspot_owner_name": rep,
+                                    "call_title": f"[Gong] {title}",
+                                    "company_name": row.get("external_participants", ""),
+                                    "call_source": "Gong",
+                                    "call_id": row.get("call_id", ""),
+                                })
+                                seen_keys.setdefault(date_key, []).append(title)
+
+    logger.info("Gong calls (AI Summaries): %d call rows.", len(call_rows))
+
+    # ── Step 2: Gong Calls sheet fallback for calls missing from AI Summaries ──
+    if gong_calls is not None and not gong_calls.empty:
+        gc_title_col = next((c for c in ("title", "call_title", "name") if c in gong_calls.columns), None)
+        gc_email_col = next((c for c in ("primary_rep_email", "owner_email", "rep_email", "host_email") if c in gong_calls.columns), None)
+        gc_name_col = next((c for c in ("primary_rep", "owner_name", "host", "rep_name") if c in gong_calls.columns), None)
+        gc_date_col = next((c for c in ("started", "scheduled", "date") if c in gong_calls.columns), None)
+        gc_company_col = next((c for c in ("external_participants", "company", "account") if c in gong_calls.columns), None)
+        direction_col = next((c for c in ("direction",) if c in gong_calls.columns), None)
+
+        if gc_title_col and gc_date_col and direction_col and (gc_email_col or gc_name_col):
+            non_conf_mask = gong_calls[direction_col].astype(str).str.strip().str.lower() != "conference"
+            gc_non_conf = gong_calls[non_conf_mask].copy()
+
+            # Exclude call_ids already processed from AI summaries
+            processed_ids = set(gong_ai_summaries["call_id"]) if not gong_ai_summaries.empty and "call_id" in gong_ai_summaries.columns else set()
+            if "call_id" in gc_non_conf.columns and processed_ids:
+                gc_non_conf = gc_non_conf[~gc_non_conf["call_id"].isin(processed_ids)]
+
+            fallback_count = 0
+            for _, gc_row in gc_non_conf.iterrows():
+                gc_date = pd.to_datetime(gc_row.get(gc_date_col), errors="coerce")
+                if pd.isna(gc_date):
+                    continue
+                if gc_date.tzinfo is not None:
+                    gc_date = gc_date.tz_localize(None)
+                gc_date = gc_date.normalize()
+
+                fb_reps = _resolve_reps(gc_row, gc_email_col, gc_name_col, None)
+                if not fb_reps:
+                    continue
+
+                fb_title = str(gc_row.get(gc_title_col, "Gong Call"))
+                fb_company = str(gc_row.get(gc_company_col, "")) if gc_company_col and pd.notna(gc_row.get(gc_company_col)) else ""
+
+                for fb_rep in fb_reps:
+                    fb_key = (fb_rep, str(gc_date.date()))
+                    if any(_titles_match(fb_title, et) for et in seen_keys.get(fb_key, [])):
+                        continue
+                    call_rows.append({
+                        "activity_date": gc_date,
+                        "hubspot_owner_name": fb_rep,
+                        "call_title": f"[Gong] {fb_title}",
+                        "company_name": fb_company,
+                        "call_source": "Gong",
+                        "call_id": gc_row.get("call_id", ""),
+                    })
+                    seen_keys.setdefault(fb_key, []).append(fb_title)
+                    fallback_count += 1
+
+            if fallback_count:
+                logger.info("Gong Calls fallback: added %d additional calls.", fallback_count)
+
+    if call_rows:
+        result = pd.DataFrame(call_rows)
+    else:
+        result = pd.DataFrame(columns=["activity_date", "hubspot_owner_name", "call_title", "company_name", "call_source"])
+
+    logger.info("Call build complete: %d total Gong calls.", len(result))
+    return result
+
+
 def load_all() -> AnalyticsData:
     """
     Full pipeline:
@@ -550,12 +686,10 @@ def load_all() -> AnalyticsData:
         hubspot_meetings = hubspot_meetings[hubspot_meetings["meeting_outcome"].str.strip().str.lower() == "completed"]
     meetings = _build_meetings_gong_primary(hubspot_meetings, gong_ai_summaries, gong_calls_sheet)
 
-    calls = apply_activity_filters(norm.get("calls", pd.DataFrame()))
-
-    # Note: Conference calls are NOT reclassified as meetings here.
-    # Real meetings are captured via HubSpot meetings (Completed outcome)
-    # + Gong AI Summaries (Conference direction).  Reclassifying HubSpot
-    # "conference" calls inflated SDR meeting counts (e.g., Owen's multi-line dials).
+    # 6c - Build calls: Gong is the exclusive source for calls.
+    # Non-conference Gong calls (outbound, inbound, etc.) = calls.
+    # Conference Gong calls = meetings (handled above).
+    calls = _build_calls_from_gong(gong_ai_summaries, gong_calls_sheet)
 
     emails = apply_activity_filters(norm.get("emails", pd.DataFrame()))
     notes = apply_activity_filters(norm.get("notes", pd.DataFrame()))
