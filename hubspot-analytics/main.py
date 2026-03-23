@@ -17,7 +17,9 @@ HubSpot calls are used as fallback when Gong produces zero call rows.
 Gong direction values: "Web conference", "Telephony: Outbound", "Telephony: Inbound", "Conference".
 """
 
+import glob
 import logging
+import os
 from dataclasses import dataclass, field
 
 import pandas as pd
@@ -101,7 +103,7 @@ def _normalize_gong_sheet(df: pd.DataFrame, sheet_type: str) -> pd.DataFrame:
     elif sheet_type == "gong_calls":
         if "duration_sec" in df.columns:
             df["duration_sec"] = pd.to_numeric(df["duration_sec"], errors="coerce")
-        for col in ("scheduled", "started"):
+        for col in ("scheduled", "started", "date"):
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors="coerce")
     elif sheet_type == "gong_users":
@@ -109,6 +111,44 @@ def _normalize_gong_sheet(df: pd.DataFrame, sheet_type: str) -> pd.DataFrame:
             df["created"] = pd.to_datetime(df["created"], errors="coerce")
 
     return df
+
+
+def _read_gong_export_csvs() -> pd.DataFrame:
+    """Read Gong export CSV files (Calls) from the repo root directory.
+
+    The Gong Calls Google Sheet only contains conference/web calls.
+    Telephony calls (outbound dialer) come from Gong CSV exports that
+    the user adds to the repo root.  File pattern:
+        *Calls*.csv
+    """
+    # Look in repo root (one level up from hubspot-analytics/)
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Also check working directory in case app runs from repo root
+    search_dirs = [repo_root, os.getcwd()]
+    seen_paths: set[str] = set()
+    frames: list[pd.DataFrame] = []
+
+    for search_dir in search_dirs:
+        for csv_path in glob.glob(os.path.join(search_dir, "*Calls*.csv")):
+            real = os.path.realpath(csv_path)
+            if real in seen_paths:
+                continue
+            seen_paths.add(real)
+            try:
+                df = pd.read_csv(csv_path)
+                logger.info("Read Gong CSV export: %s (%d rows)", os.path.basename(csv_path), len(df))
+                frames.append(df)
+            except Exception as exc:
+                logger.warning("Failed to read Gong CSV %s: %s", csv_path, exc)
+
+    if not frames:
+        return pd.DataFrame()
+
+    combined = pd.concat(frames, ignore_index=True)
+    # Normalize columns same as Gong sheet tabs
+    combined = _normalize_gong_sheet(combined, "gong_calls")
+    logger.info("Gong CSV exports: %d total rows, columns: %s", len(combined), list(combined.columns))
+    return combined
 
 
 # Map rep emails to HubSpot rep names for Gong matching
@@ -683,6 +723,19 @@ def load_all() -> AnalyticsData:
     gong_users = _normalize_gong_sheet(
         norm.pop("gong_users", pd.DataFrame()), "gong_users"
     )
+
+    # Supplement Gong Calls sheet with CSV exports (telephony calls)
+    gong_csv_calls = _read_gong_export_csvs()
+    if not gong_csv_calls.empty:
+        if gong_calls_sheet.empty:
+            gong_calls_sheet = gong_csv_calls
+        else:
+            # Merge, dedup by call_id
+            combined = pd.concat([gong_calls_sheet, gong_csv_calls], ignore_index=True)
+            if "call_id" in combined.columns:
+                combined = combined.drop_duplicates(subset=["call_id"], keep="first")
+            gong_calls_sheet = combined
+        logger.info("After CSV merge: %d total Gong Calls rows.", len(gong_calls_sheet))
 
     logger.info(
         "Gong sheets: %d AI summaries, %d calls, %d users.",
