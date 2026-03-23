@@ -201,6 +201,9 @@ def _resolve_attendees(attendees_value) -> list[str]:
     return reps
 
 
+_RESOLVE_REPS_MISS_LOGGED = set()  # Track already-logged misses to avoid spam
+
+
 def _resolve_reps(row, email_col: str | None, name_col: str | None, attendees_col: str | None) -> list[str]:
     """Resolve in-scope reps from a Gong row using email, name, and attendees columns."""
     reps = []
@@ -211,11 +214,17 @@ def _resolve_reps(row, email_col: str | None, name_col: str | None, attendees_co
             name = _EMAIL_TO_REP[email]
             reps.append(name)
             seen.add(name)
+        elif email and email not in _RESOLVE_REPS_MISS_LOGGED:
+            _RESOLVE_REPS_MISS_LOGGED.add(email)
+            logger.debug("  _resolve_reps: email %r not in _EMAIL_TO_REP", email)
     if not reps and name_col and pd.notna(row.get(name_col)):
         name = str(row[name_col]).strip()
         if name in REPS_IN_SCOPE:
             reps.append(name)
             seen.add(name)
+        elif name and name not in _RESOLVE_REPS_MISS_LOGGED:
+            _RESOLVE_REPS_MISS_LOGGED.add(name)
+            logger.debug("  _resolve_reps: name %r not in REPS_IN_SCOPE", name)
     if attendees_col:
         for extra in _resolve_attendees(row.get(attendees_col)):
             if extra not in seen:
@@ -470,8 +479,16 @@ def _build_meetings_gong_primary(
 
     if parts:
         result = pd.concat(parts, ignore_index=True)
+    elif not hubspot_meetings.empty:
+        logger.warning(
+            "Gong produced 0 meeting rows and no HubSpot-only matches found. "
+            "Falling back to ALL %d HubSpot meetings.",
+            len(hubspot_meetings),
+        )
+        result = hubspot_meetings.copy()
+        result["has_gong"] = False
     else:
-        result = hubspot_meetings.copy() if not hubspot_meetings.empty else pd.DataFrame()
+        result = pd.DataFrame()
 
     logger.info(
         "Meeting build complete: %d Gong + %d HubSpot-only = %d total.",
@@ -483,13 +500,16 @@ def _build_meetings_gong_primary(
 def _build_calls_from_gong(
     gong_ai_summaries: pd.DataFrame,
     gong_calls: pd.DataFrame | None = None,
+    hubspot_calls: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
-    Build the calls table exclusively from Gong data.
+    Build the calls table from Gong data, with HubSpot as fallback.
 
     Non-conference Gong calls (outbound, inbound, etc.) become call rows.
     Uses AI Summaries as the primary source (enriched data), with the
     Gong Calls sheet as fallback for calls missing from AI Summaries.
+
+    If Gong produces zero call rows, falls back to HubSpot calls entirely.
 
     Deduplication is by call_id only — each unique Gong call is a distinct
     activity.  No fuzzy title matching (unlike meetings), because a rep can
@@ -610,11 +630,19 @@ def _build_calls_from_gong(
 
     if call_rows:
         result = pd.DataFrame(call_rows)
-    else:
-        result = pd.DataFrame(columns=["activity_date", "hubspot_owner_name", "call_title", "company_name", "call_source"])
+        logger.info("Call build complete: %d total Gong calls.", len(result))
+        return result
 
-    logger.info("Call build complete: %d total Gong calls.", len(result))
-    return result
+    # ── Fallback: If Gong produced zero calls, use HubSpot calls ──
+    logger.warning(
+        "Gong produced 0 call rows — falling back to HubSpot calls. "
+        "Check Gong sheet column names and rep email/name mappings."
+    )
+    if hubspot_calls is not None and not hubspot_calls.empty:
+        logger.info("HubSpot calls fallback: using %d HubSpot call rows.", len(hubspot_calls))
+        return hubspot_calls
+    logger.warning("HubSpot calls also empty — returning empty calls DataFrame.")
+    return pd.DataFrame(columns=["activity_date", "hubspot_owner_name", "call_title", "company_name", "call_source"])
 
 
 def load_all() -> AnalyticsData:
@@ -657,6 +685,10 @@ def load_all() -> AnalyticsData:
         "Gong sheets: %d AI summaries, %d calls, %d users.",
         len(gong_ai_summaries), len(gong_calls_sheet), len(gong_users),
     )
+    if not gong_ai_summaries.empty:
+        logger.info("Gong AI Summaries columns: %s", list(gong_ai_summaries.columns))
+    if not gong_calls_sheet.empty:
+        logger.info("Gong Calls columns: %s", list(gong_calls_sheet.columns))
 
     # 3 - Build UID map from meetings (the Rosetta Stone)
     logger.info("Building HubSpot UID -> Name mapping...")
@@ -691,10 +723,12 @@ def load_all() -> AnalyticsData:
         hubspot_meetings = hubspot_meetings[hubspot_meetings["meeting_outcome"].str.strip().str.lower() == "completed"]
     meetings = _build_meetings_gong_primary(hubspot_meetings, gong_ai_summaries, gong_calls_sheet)
 
-    # 6c - Build calls: Gong is the exclusive source for calls.
+    # 6c - Build calls: Gong is the primary source for calls, HubSpot fallback.
     # Non-conference Gong calls (outbound, inbound, etc.) = calls.
     # Conference Gong calls = meetings (handled above).
-    calls = _build_calls_from_gong(gong_ai_summaries, gong_calls_sheet)
+    # If Gong produces zero calls, falls back to HubSpot calls.
+    hubspot_calls = apply_activity_filters(norm.get("calls", pd.DataFrame()))
+    calls = _build_calls_from_gong(gong_ai_summaries, gong_calls_sheet, hubspot_calls)
 
     emails = apply_activity_filters(norm.get("emails", pd.DataFrame()))
     notes = apply_activity_filters(norm.get("notes", pd.DataFrame()))
