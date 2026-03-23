@@ -8,10 +8,13 @@ don't already match a Gong call (i.e., meetings Gong wasn't recording).
 Gong data comes from Google Sheets (synced via Apps Script), not the Gong API.
 Tasks are excluded from activity metrics.
 
-Both meetings AND calls are sourced from Gong exclusively:
-  - Meetings = Gong Conference-direction calls
-  - Calls = Gong non-Conference-direction calls (outbound, inbound, etc.)
+Both meetings AND calls are sourced from Gong primarily:
+  - Meetings = Gong "Web conference" / "Conference" direction calls
+  - Calls = Gong telephony calls (outbound, inbound, etc.)
 HubSpot Completed meetings are added as fallback only when Gong didn't record them.
+HubSpot calls are used as fallback when Gong produces zero call rows.
+
+Gong direction values: "Web conference", "Telephony: Outbound", "Telephony: Inbound", "Conference".
 """
 
 import logging
@@ -256,7 +259,7 @@ def _filter_conference_calls(
     direction_counts = call_dirs["_dir"].value_counts()
     logger.info("Gong Calls direction distribution: %s", direction_counts.to_dict())
 
-    conference_ids = set(call_dirs.loc[call_dirs["_dir"] == "conference", "call_id"])
+    conference_ids = set(call_dirs.loc[call_dirs["_dir"].str.contains("conference", na=False), "call_id"])
     logger.info("Conference call_ids: %d", len(conference_ids))
 
     # Diagnostic: show sample call_ids from each source to detect mismatches
@@ -385,7 +388,7 @@ def _build_meetings_gong_primary(
         direction_col = next((c for c in ("direction",) if c in gong_calls.columns), None)
 
         if gc_title_col and gc_date_col and direction_col and (gc_email_col or gc_name_col):
-            conf_mask = gong_calls[direction_col].astype(str).str.strip().str.lower() == "conference"
+            conf_mask = gong_calls[direction_col].astype(str).str.strip().str.lower().str.contains("conference", na=False)
             gc_conf = gong_calls[conf_mask].copy()
 
             # Exclude call_ids already processed from AI summaries
@@ -533,7 +536,7 @@ def _build_calls_from_gong(
             if direction_col:
                 call_dirs = gong_calls[["call_id", direction_col]].drop_duplicates("call_id")
                 call_dirs["_dir"] = call_dirs[direction_col].astype(str).str.strip().str.lower()
-                non_conf_ids = set(call_dirs.loc[call_dirs["_dir"] != "conference", "call_id"])
+                non_conf_ids = set(call_dirs.loc[~call_dirs["_dir"].str.contains("conference", na=False), "call_id"])
 
                 gong_non_conf = gong_ai_summaries[gong_ai_summaries["call_id"].isin(non_conf_ids)].copy()
                 logger.info("Gong calls from AI Summaries: %d non-conference entries.", len(gong_non_conf))
@@ -585,7 +588,7 @@ def _build_calls_from_gong(
         direction_col = next((c for c in ("direction",) if c in gong_calls.columns), None)
 
         if gc_title_col and gc_date_col and direction_col and (gc_email_col or gc_name_col):
-            non_conf_mask = gong_calls[direction_col].astype(str).str.strip().str.lower() != "conference"
+            non_conf_mask = ~gong_calls[direction_col].astype(str).str.strip().str.lower().str.contains("conference", na=False)
             gc_non_conf = gong_calls[non_conf_mask].copy()
 
             # Exclude call_ids already processed from AI summaries

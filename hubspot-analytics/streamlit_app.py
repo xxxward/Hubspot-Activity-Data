@@ -1522,7 +1522,7 @@ if st.session_state.page == "command":
                                 _rep_name = _nm
                         if _rep_name and _rep_name in selected_reps:
                             _gc_rep_map.setdefault(_rep_name, {"conference": 0, "non_conference": 0})
-                            if _gcr["_gc_dir"] == "conference":
+                            if "conference" in _gcr["_gc_dir"]:
                                 _gc_rep_map[_rep_name]["conference"] += 1
                             else:
                                 _gc_rep_map[_rep_name]["non_conference"] += 1
