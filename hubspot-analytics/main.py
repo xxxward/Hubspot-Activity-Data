@@ -706,7 +706,7 @@ def load_all() -> AnalyticsData:
     # 2 - Normalize HubSpot columns & types
     logger.info("Normalizing...")
     norm = {}
-    hubspot_tabs = ("deals", "meetings", "calls", "tickets", "emails", "notes", "tasks", "new_pipeline", "pre_order_support")
+    hubspot_tabs = ("deals", "meetings", "calls", "tickets", "emails", "notes", "tasks", "new_pipeline")
     for k, v in raw.items():
         if k in hubspot_tabs:
             norm[k] = normalize_dataframe(v)
@@ -752,7 +752,7 @@ def load_all() -> AnalyticsData:
 
     # 4 - Apply owner mapping per tab type (skip tasks — not tracked)
     logger.info("Applying owner mappings...")
-    for tab_type in ("deals", "meetings", "calls", "tickets", "emails", "notes", "tasks", "new_pipeline", "pre_order_support"):
+    for tab_type in ("deals", "meetings", "calls", "tickets", "emails", "notes", "tasks", "new_pipeline"):
         if tab_type in norm and not norm[tab_type].empty:
             norm[tab_type] = apply_owner_mapping(norm[tab_type], uid_map, tab_type)
 
@@ -788,22 +788,7 @@ def load_all() -> AnalyticsData:
 
     emails = apply_activity_filters(norm.get("emails", pd.DataFrame()))
     notes = apply_activity_filters(norm.get("notes", pd.DataFrame()))
-    # Merge Pre Order Support (new estimate tickets) into the tickets dataset.
-    # Old estimates: Tickets tab (pipeline != "Sample Kit").
-    # New estimates: Pre Order Support tab (all rows are estimates).
     tickets = norm.get("tickets", pd.DataFrame())
-    pre_order_df = apply_activity_filters(norm.get("pre_order_support", pd.DataFrame()))
-    if not pre_order_df.empty:
-        pre_order_df = pre_order_df.copy()
-        pre_order_df["_source"] = "pre_order_support"
-        logger.info("Merging %d Pre Order Support rows into tickets.", len(pre_order_df))
-        for col in ("created_date", "hubspot_owner_name", "pipeline"):
-            if col not in tickets.columns and not tickets.empty:
-                tickets[col] = pd.NaT if col == "created_date" else ""
-            if col not in pre_order_df.columns:
-                pre_order_df[col] = pd.NaT if col == "created_date" else ""
-        tickets = pd.concat([tickets, pre_order_df], ignore_index=True)
-
     tasks = apply_activity_filters(norm.get("tasks", pd.DataFrame()))  # For Deal Health only
     new_pipeline = apply_activity_filters(norm.get("new_pipeline", pd.DataFrame()))
 

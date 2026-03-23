@@ -2193,104 +2193,54 @@ elif st.session_state.page == "tickets":
 
     st.markdown("""<div class="page-header">
         <h1>🎫 Tickets</h1>
-        <p class="page-sub">Estimates and Sample Kit requests, tracked and closed.</p>
+        <p class="page-sub">Support issues, tracked and closed.</p>
     </div>""", unsafe_allow_html=True)
 
-    # ── Split tickets into Estimates vs Sample Kits ──
-    def _split_tickets_ui(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """Split into estimates and sample kits (same logic as daily_report)."""
-        if df.empty:
-            return pd.DataFrame(), pd.DataFrame()
-        source_col = "_source" if "_source" in df.columns else None
-        if source_col:
-            pre_order_mask = df[source_col] == "pre_order_support"
-        else:
-            pre_order_mask = pd.Series(False, index=df.index)
-        old_tickets = df[~pre_order_mask]
-        if "pipeline" in old_tickets.columns and not old_tickets.empty:
-            pipeline_lower = old_tickets["pipeline"].astype(str).str.strip().str.lower()
-            sample_mask = pipeline_lower.str.contains("sample", na=False)
-            old_estimates = old_tickets[~sample_mask]
-            sample_kits = old_tickets[sample_mask]
-        else:
-            old_estimates = old_tickets
-            sample_kits = pd.DataFrame()
-        pre_order_estimates = df[pre_order_mask]
-        estimates = pd.concat([old_estimates, pre_order_estimates], ignore_index=True)
-        return estimates, sample_kits
-
-    all_estimates, all_samples = _split_tickets_ui(fk)
-
-    # ── Filter: All / Estimates / Sample Kits ──
-    ticket_view = st.radio(
-        "View", ["All", "Estimates", "Sample Kits"],
-        horizontal=True, key="ticket_view_filter",
-    )
-    if ticket_view == "Estimates":
-        fk_filtered = all_estimates
-    elif ticket_view == "Sample Kits":
-        fk_filtered = all_samples
-    else:
-        fk_filtered = fk
-
     if fk.empty:
-        empty_state("No tickets in this range. Clean slate!")
+        empty_state("No tickets in this range. Clean slate! ✨")
     else:
-        # ── KPI row: show totals + breakdown ──
+        n_tickets = len(fk)
+        n_closed = 0
+        if "ticket_status" in fk.columns:
+            status_upper = fk["ticket_status"].astype(str).str.upper().str.strip()
+            n_closed = int(status_upper.isin({"CLOSED", "RESOLVED", "DONE"}).sum())
+        n_open = n_tickets - n_closed
+
         kpi([
-            ("Total Tickets", f"{len(fk):,}", "red"),
-            ("Estimates", f"{len(all_estimates):,}", "purple"),
-            ("Sample Kits", f"{len(all_samples):,}", "amber"),
+            ("Total Created", f"{n_tickets:,}", "red"),
+            ("Closed", f"{n_closed:,}", "green"),
+            ("Open", f"{n_open:,}", "amber" if n_open > 0 else ""),
         ])
 
         section_divider()
 
-        # ── Charts row ──
         ch1, ch2 = st.columns(2)
         with ch1:
-            section_header("📊", "Estimates vs Sample Kits", C["tickets"])
-            type_data = pd.DataFrame({
-                "Type": ["Estimates", "Sample Kits"],
-                "Count": [len(all_estimates), len(all_samples)],
-            })
-            fig = px.pie(type_data, names="Type", values="Count", hole=0.5,
-                         color="Type", color_discrete_map={"Estimates": C["purple"], "Sample Kits": C["tasks"]})
+            section_header("📊", "Open vs Closed", C["tickets"])
+            oc_data = pd.DataFrame({"Status": ["Open", "Closed"], "Count": [n_open, n_closed]})
+            fig = px.pie(oc_data, names="Status", values="Count", hole=0.5,
+                         color="Status", color_discrete_map={"Open": C["tasks"], "Closed": C["active"]})
             fig.update_traces(textinfo="label+value", textfont=dict(color="#ede9fc", size=12))
             st.plotly_chart(styled_fig(fig, 280), use_container_width=True)
 
         with ch2:
             section_header("📂", "By Status", C["tickets"])
-            if "ticket_status" in fk_filtered.columns and not fk_filtered.empty:
-                ts = fk_filtered["ticket_status"].value_counts().reset_index()
+            if "ticket_status" in fk.columns:
+                ts = fk["ticket_status"].value_counts().reset_index()
                 ts.columns = ["Status", "Count"]
                 fig = px.bar(ts, x="Status", y="Count", color_discrete_sequence=[C["tickets"]])
                 fig.update_layout(xaxis_title="", yaxis_title="")
                 st.plotly_chart(styled_fig(fig, 280), use_container_width=True)
-            else:
-                empty_state("No data for this filter.")
 
         section_divider()
 
-        # ── By Rep breakdown ──
-        if "hubspot_owner_name" in fk_filtered.columns and not fk_filtered.empty:
-            section_header("👥", "By Rep", C["tickets"])
-            rep_counts = fk_filtered["hubspot_owner_name"].value_counts().reset_index()
-            rep_counts.columns = ["Rep", "Count"]
-            fig = px.bar(rep_counts, x="Rep", y="Count", color_discrete_sequence=[C["tickets"]])
-            fig.update_layout(xaxis_title="", yaxis_title="")
-            st.plotly_chart(styled_fig(fig, 280), use_container_width=True)
-
-            section_divider()
-
-        # ── Detail table ──
-        section_header("📋", f"{ticket_view} Tickets", C["tickets"])
+        # Detail table
+        section_header("📋", "All Tickets", C["tickets"])
         tkt_cols = [c for c in ("created_date", "hubspot_owner_name", "company_name", "ticket_name",
-                                 "ticket_status", "pipeline", "deal_name", "ticket_category", "ticket_type") if c in fk_filtered.columns]
-        if tkt_cols and not fk_filtered.empty:
-            st.dataframe(_display_df(_safe_sort(fk_filtered[tkt_cols].copy(), tkt_cols[0])),
+                                 "ticket_status", "pipeline", "deal_name", "ticket_category") if c in fk.columns]
+        if tkt_cols:
+            st.dataframe(_display_df(_safe_sort(fk[tkt_cols].copy(), tkt_cols[0])),
                          use_container_width=True, hide_index=True)
-        elif fk_filtered.empty:
-            empty_state(f"No {ticket_view.lower()} in this range.")
 
 
 # ════════════════════════════════════════════════════════════════════════
