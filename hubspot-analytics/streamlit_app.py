@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 from src.utils.logging import setup_logging
 from src.parsing.filters import REPS_IN_SCOPE, PIPELINES_IN_SCOPE
 from src.metrics.scoring import WEIGHTS
-from main import load_all, AnalyticsData
+from main import load_all, AnalyticsData, _EMAIL_TO_REP
 
 # Close Status options for filtering
 CLOSE_STATUS_OPTIONS = ["Best Case", "Expect", "Opportunity"]
@@ -1484,7 +1484,157 @@ if st.session_state.page == "command":
             )
             
             section_divider()
-            
+
+            # ── Gong Baseline Comparison ──────────────────────────────────
+            section_header("🎙️", "Gong Baseline Comparison — Last Week", C.get("gong", "#67e8f9"))
+            st.markdown("**How do our dashboard numbers compare to Gong's raw activity data?** Differences show enrichment or gaps in our data pipeline.")
+
+            _gc_raw = data.gong_calls.copy() if not data.gong_calls.empty else pd.DataFrame()
+            if not _gc_raw.empty:
+                # Resolve date and direction columns
+                _gc_date_col = next((c for c in ("started", "scheduled", "date") if c in _gc_raw.columns), None)
+                _gc_dir_col = next((c for c in ("direction",) if c in _gc_raw.columns), None)
+                _gc_email_col = next((c for c in ("primary_rep_email", "owner_email", "rep_email", "host_email") if c in _gc_raw.columns), None)
+                _gc_name_col = next((c for c in ("primary_rep", "owner_name", "host", "rep_name") if c in _gc_raw.columns), None)
+
+                if _gc_date_col and _gc_dir_col:
+                    _gc_raw["_gc_dt"] = pd.to_datetime(_gc_raw[_gc_date_col], errors="coerce")
+                    if _gc_raw["_gc_dt"].dt.tz is not None:
+                        _gc_raw["_gc_dt"] = _gc_raw["_gc_dt"].dt.tz_localize(None)
+                    _gc_raw["_gc_dir"] = _gc_raw[_gc_dir_col].astype(str).str.strip().str.lower()
+
+                    # Last week = Monday-Sunday before current week
+                    _lw_start = pd.Timestamp(date.today() - timedelta(days=date.today().weekday() + 7))
+                    _lw_end = _lw_start + pd.Timedelta(days=6, hours=23, minutes=59, seconds=59)
+
+                    _gc_lw = _gc_raw[(_gc_raw["_gc_dt"] >= _lw_start) & (_gc_raw["_gc_dt"] <= _lw_end)].copy()
+
+                    # Resolve rep for each Gong call
+                    _gc_rep_map = {}
+                    for _, _gcr in _gc_lw.iterrows():
+                        _rep_name = None
+                        if _gc_email_col and pd.notna(_gcr.get(_gc_email_col)):
+                            _em = str(_gcr[_gc_email_col]).strip().lower()
+                            _rep_name = _EMAIL_TO_REP.get(_em)
+                        if not _rep_name and _gc_name_col and pd.notna(_gcr.get(_gc_name_col)):
+                            _nm = str(_gcr[_gc_name_col]).strip()
+                            if _nm in REPS_IN_SCOPE:
+                                _rep_name = _nm
+                        if _rep_name and _rep_name in selected_reps:
+                            _gc_rep_map.setdefault(_rep_name, {"conference": 0, "non_conference": 0})
+                            if _gcr["_gc_dir"] == "conference":
+                                _gc_rep_map[_rep_name]["conference"] += 1
+                            else:
+                                _gc_rep_map[_rep_name]["non_conference"] += 1
+
+                    # Our dashboard counts for last week
+                    _lw_start_ts = _lw_start
+                    _lw_end_ts = _lw_end
+
+                    comparison_rows = []
+                    for rep in selected_reps:
+                        gong_counts = _gc_rep_map.get(rep, {"conference": 0, "non_conference": 0})
+                        gong_conf = gong_counts["conference"]
+                        gong_calls_count = gong_counts["non_conference"]
+
+                        # Our calls last week
+                        our_calls = 0
+                        if not fc.empty and "activity_date" in fc.columns:
+                            _fc_dt = pd.to_datetime(fc["activity_date"], errors="coerce")
+                            our_calls = len(fc[(fc["hubspot_owner_name"] == rep) &
+                                              (_fc_dt >= _lw_start_ts) & (_fc_dt <= _lw_end_ts)])
+
+                        # Our meetings last week
+                        our_meetings = 0
+                        if not fm.empty and "meeting_start_time" in fm.columns:
+                            _fm_dt = pd.to_datetime(fm["meeting_start_time"], errors="coerce")
+                            if "_counts_as_meeting" in fm.columns:
+                                our_meetings = len(fm[(fm["hubspot_owner_name"] == rep) &
+                                                     (_fm_dt >= _lw_start_ts) & (_fm_dt <= _lw_end_ts) &
+                                                     (fm["_counts_as_meeting"] == True)])
+                            else:
+                                our_meetings = len(fm[(fm["hubspot_owner_name"] == rep) &
+                                                     (_fm_dt >= _lw_start_ts) & (_fm_dt <= _lw_end_ts)])
+
+                        # Our emails last week
+                        our_emails = 0
+                        if not fe.empty and "activity_date" in fe.columns:
+                            _fe_dt = pd.to_datetime(fe["activity_date"], errors="coerce")
+                            our_emails = len(fe[(fe["hubspot_owner_name"] == rep) &
+                                               (_fe_dt >= _lw_start_ts) & (_fe_dt <= _lw_end_ts)])
+
+                        calls_delta = our_calls - gong_calls_count
+                        conf_delta = our_meetings - gong_conf
+
+                        comparison_rows.append({
+                            "Rep": rep,
+                            "Gong Calls": gong_calls_count,
+                            "Our Calls": our_calls,
+                            "Calls Δ": calls_delta,
+                            "Gong Conference": gong_conf,
+                            "Our Meetings": our_meetings,
+                            "Meetings Δ": conf_delta,
+                            "Our Emails": our_emails,
+                        })
+
+                    if comparison_rows:
+                        comp_df = pd.DataFrame(comparison_rows)
+
+                        # Color the delta columns
+                        def _delta_color(val):
+                            if val > 0:
+                                return "color: #4ade80"  # green — we have MORE
+                            elif val < 0:
+                                return "color: #fb7185"  # red — we're MISSING data
+                            return ""
+
+                        styled = comp_df.style.map(_delta_color, subset=["Calls Δ", "Meetings Δ"])
+                        st.dataframe(
+                            styled,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "Gong Calls": st.column_config.NumberColumn("Gong Calls (Outbound)", help="Non-conference calls in Gong last week"),
+                                "Our Calls": st.column_config.NumberColumn("Our Calls", help="Calls our dashboard counted last week"),
+                                "Calls Δ": st.column_config.NumberColumn("Calls Δ", help="Positive = we found more, Negative = we're missing data"),
+                                "Gong Conference": st.column_config.NumberColumn("Gong Conference", help="Conference calls in Gong last week"),
+                                "Our Meetings": st.column_config.NumberColumn("Our Meetings", help="Meetings our dashboard counted last week"),
+                                "Meetings Δ": st.column_config.NumberColumn("Meetings Δ", help="Positive = we found more, Negative = we're missing data"),
+                                "Our Emails": st.column_config.NumberColumn("Our Emails", help="Emails from HubSpot last week (not tracked in Gong)"),
+                            }
+                        )
+
+                        # Summary insight
+                        total_gong_calls = comp_df["Gong Calls"].sum()
+                        total_our_calls = comp_df["Our Calls"].sum()
+                        total_gong_conf = comp_df["Gong Conference"].sum()
+                        total_our_mtgs = comp_df["Our Meetings"].sum()
+
+                        calls_pct = (total_our_calls / total_gong_calls * 100) if total_gong_calls > 0 else 0
+                        mtgs_pct = (total_our_mtgs / total_gong_conf * 100) if total_gong_conf > 0 else 0
+
+                        if calls_pct >= 100 and mtgs_pct >= 100:
+                            st.success(f"Our data captures **{calls_pct:.0f}%** of Gong calls and **{mtgs_pct:.0f}%** of Gong conferences. We're enriching beyond Gong!")
+                        elif calls_pct >= 90 and mtgs_pct >= 90:
+                            st.info(f"Our data captures **{calls_pct:.0f}%** of Gong calls and **{mtgs_pct:.0f}%** of conferences. Close to parity.")
+                        else:
+                            missing_calls = total_gong_calls - total_our_calls
+                            missing_mtgs = total_gong_conf - total_our_mtgs
+                            st.warning(
+                                f"Gap detected: missing **{missing_calls}** calls ({calls_pct:.0f}% captured) "
+                                f"and **{missing_mtgs}** meetings ({mtgs_pct:.0f}% captured) vs Gong baseline."
+                            )
+
+                        st.caption(f"Comparing last week ({_lw_start.strftime('%b %d')} – {_lw_end.strftime('%b %d')}). Gong data from the Gong Calls sheet. Emails are HubSpot-only (Gong doesn't track emails).")
+                    else:
+                        empty_state("No Gong data for selected reps last week")
+                else:
+                    empty_state("Gong Calls sheet missing date or direction columns")
+            else:
+                empty_state("No Gong Calls data available for comparison")
+
+            section_divider()
+
             # New SAL Creation Trend
             section_header("📈", "New Pipeline Creation Trend", C["active"])
             
